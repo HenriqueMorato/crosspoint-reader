@@ -12,9 +12,11 @@ namespace todoist {
 
 namespace {
 
-constexpr const char* kEndpoint = "https://api.todoist.com/rest/v2/tasks?filter=today";
+constexpr const char* kEndpoint = "https://api.todoist.com/api/v1/tasks/filter?query=today";
 constexpr int kHttpTimeoutMs = 15000;
-constexpr size_t kHttpBufSize = 4096;
+// Keep HTTP rx/tx buffers small. mbedTLS handshake on ESP32-C3 needs ~32 KB
+// of heap on top of these — every KB we free here is one mbedTLS can take.
+constexpr size_t kHttpBufSize = 2048;
 constexpr size_t kMaxTasks = 64;
 constexpr size_t kMaxResponseBytes = 64 * 1024;  // hard cap
 
@@ -104,7 +106,9 @@ FetchResult TodoistClient::fetchToday(const std::string& apiToken,
   }
 
   ResponseBuffer buf;
-  buf.body.reserve(8192);
+  // Typical "today" response is well under 2 KB. Reserve modestly; std::string
+  // will grow if needed (capped by kMaxResponseBytes in the event handler).
+  buf.body.reserve(2048);
 
   esp_http_client_config_t config = {};
   config.url = kEndpoint;
@@ -152,12 +156,16 @@ FetchResult TodoistClient::fetchToday(const std::string& apiToken,
     LOG_ERR("TDST", "JSON parse: %s", parseErr.c_str());
     return FetchResult::ParseError;
   }
-  if (!doc.is<JsonArray>()) {
-    LOG_ERR("TDST", "Response is not a JSON array");
+  // v1 wraps tasks in { "results": [...], "next_cursor": null|string }.
+  if (!doc["results"].is<JsonArray>()) {
+    LOG_ERR("TDST", "Response missing 'results' array");
     return FetchResult::ParseError;
   }
+  if (!doc["next_cursor"].isNull()) {
+    LOG_DBG("TDST", "Truncated: more tasks available via cursor");
+  }
 
-  JsonArray arr = doc.as<JsonArray>();
+  JsonArray arr = doc["results"].as<JsonArray>();
   for (JsonObject task : arr) {
     if (outTasks.size() >= kMaxTasks) break;
     TodoistTask t = {};

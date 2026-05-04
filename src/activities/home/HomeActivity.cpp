@@ -232,7 +232,7 @@ void HomeActivity::render(RenderLock&&) {
   // Build menu items dynamically
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
                                         tr(STR_SETTINGS_TITLE), tr(STR_TODOIST)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings, Settings};
+  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings, Recent};
 
   if (hasOpdsServers) {
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
@@ -282,5 +282,9 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
 
 void HomeActivity::onTodoistOpen() {
+  // Free the ~48 KB cover snapshot before Todoist launches — WiFi + TLS
+  // handshake need every byte of heap they can get on ESP32-C3. The cover
+  // gets re-rendered from disk on the way back via the normal render path.
+  freeCoverBuffer();
   startActivityForResult(std::make_unique<TodoistActivity>(renderer, mappedInput), [](const ActivityResult&) {});
 }

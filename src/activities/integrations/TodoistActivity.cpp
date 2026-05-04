@@ -10,6 +10,8 @@
 #include <WiFi.h>
 #include <esp_sntp.h>
 
+#include <sys/time.h>
+
 #include <ctime>
 #include <cstdio>
 #include <cstring>
@@ -30,6 +32,10 @@ const char* orientationToString(GfxRenderer::Orientation o) {
   return "portrait";
 }
 
+// Try NTP first. If it times out, set the clock to the firmware's build
+// date so TLS cert validation can still succeed — mbedTLS rejects certs
+// whose notBefore lies in the future relative to the device clock, and
+// the api.todoist.com cert's notBefore is well after the epoch fallback.
 void syncTimeWithNTP() {
   if (esp_sntp_enabled()) esp_sntp_stop();
   esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
@@ -41,7 +47,20 @@ void syncTimeWithNTP() {
     vTaskDelay(100 / portTICK_PERIOD_MS);
     ++retry;
   }
-  if (retry >= 50) LOG_DBG("TDST", "NTP timeout (using fallback)");
+  if (retry < 50) {
+    LOG_DBG("TDST", "NTP synced");
+    return;
+  }
+
+  LOG_DBG("TDST", "NTP timeout, using build date for TLS validation");
+  struct tm tm = {};
+  if (strptime(__DATE__ " " __TIME__, "%b %d %Y %H:%M:%S", &tm) != nullptr) {
+    time_t t = mktime(&tm);
+    struct timeval tv = {.tv_sec = t, .tv_usec = 0};
+    settimeofday(&tv, nullptr);
+  } else {
+    LOG_ERR("TDST", "Build date parse failed; clock unset");
+  }
 }
 
 void wifiOff() {
@@ -74,8 +93,10 @@ void TodoistActivity::onExit() {
 }
 
 void TodoistActivity::loop() {
-  mappedInput.update();
-
+  // Don't call mappedInput.update() here — main loop already calls gpio.update()
+  // before dispatching to the activity. A second update() in the same frame
+  // re-snapshots state and clears the press/release edges, leaving wasReleased()
+  // permanently false.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
@@ -221,6 +242,7 @@ void TodoistActivity::captureSnapshotIfNeeded() {
             renderer.getDisplayWidth(), renderer.getDisplayHeight())) {
       LOG_ERR("TDST", "Snapshot save failed");
     } else {
+      LOG_DBG("TDST", "Snapshot saved to %s", kSnapshotBmpPath);
       writeSnapshotMeta(snapshotOrient);
     }
     return;
@@ -234,6 +256,7 @@ void TodoistActivity::captureSnapshotIfNeeded() {
           renderer.getDisplayWidth(), renderer.getDisplayHeight())) {
     LOG_ERR("TDST", "Snapshot save failed");
   } else {
+    LOG_DBG("TDST", "Snapshot saved to %s (rotated)", kSnapshotBmpPath);
     writeSnapshotMeta(snapshotOrient);
   }
   renderer.setOrientation(activityOrient);

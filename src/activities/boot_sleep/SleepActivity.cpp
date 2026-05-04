@@ -308,9 +308,18 @@ void SleepActivity::renderBlankSleepScreen() const {
 bool SleepActivity::tryRenderTodoistSleepScreen() const {
   using todoist::TodoistConfig;
 
-  if (!TodoistConfig::getInstance().isSleepScreenEnabled()) return false;
-  if (!Storage.exists("/.crosspoint/todoist_sleep.bmp")) return false;
-  if (!Storage.exists("/.crosspoint/todoist_sleep.meta")) return false;
+  if (!TodoistConfig::getInstance().isSleepScreenEnabled()) {
+    LOG_DBG("TDST", "Sleep screen skipped: sleep_screen_enabled=false in config");
+    return false;
+  }
+  if (!Storage.exists("/.crosspoint/todoist_sleep.bmp")) {
+    LOG_DBG("TDST", "Sleep screen skipped: /.crosspoint/todoist_sleep.bmp missing");
+    return false;
+  }
+  if (!Storage.exists("/.crosspoint/todoist_sleep.meta")) {
+    LOG_DBG("TDST", "Sleep screen skipped: /.crosspoint/todoist_sleep.meta missing");
+    return false;
+  }
 
   // Read meta and verify orientation matches the configured snapshot orientation.
   FsFile metaFile;
