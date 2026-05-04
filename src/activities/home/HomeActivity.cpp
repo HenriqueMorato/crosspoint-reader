@@ -17,11 +17,12 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "activities/integrations/TodoistActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // File Browser, Recents, File transfer, Settings
+  int count = 5;  // File Browser, Recents, File transfer, Settings, Todoist
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -192,7 +193,8 @@ void HomeActivity::loop() {
     const int recentsIdx = idx++;
     const int opdsLibraryIdx = hasOpdsServers ? idx++ : -1;
     const int fileTransferIdx = idx++;
-    const int settingsIdx = idx;
+    const int settingsIdx = idx++;
+    const int todoistIdx = idx;
 
     if (selectorIndex < recentBooks.size()) {
       onSelectBook(recentBooks[selectorIndex].path);
@@ -206,6 +208,8 @@ void HomeActivity::loop() {
       onFileTransferOpen();
     } else if (menuSelectedIndex == settingsIdx) {
       onSettingsOpen();
+    } else if (menuSelectedIndex == todoistIdx) {
+      onTodoistOpen();
     }
   }
 }
@@ -227,8 +231,8 @@ void HomeActivity::render(RenderLock&&) {
 
   // Build menu items dynamically
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
+                                        tr(STR_SETTINGS_TITLE), tr(STR_TODOIST)};
+  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings, Settings};
 
   if (hasOpdsServers) {
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
@@ -276,3 +280,8 @@ void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
+
+void HomeActivity::onTodoistOpen() {
+  startActivityForResult(std::make_unique<TodoistActivity>(renderer, mappedInput),
+                         [this](const ActivityResult&) { requestUpdate(true); });
+}
