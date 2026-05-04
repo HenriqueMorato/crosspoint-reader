@@ -282,6 +282,5 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
 
 void HomeActivity::onTodoistOpen() {
-  startActivityForResult(std::make_unique<TodoistActivity>(renderer, mappedInput),
-                         [this](const ActivityResult&) { requestUpdate(true); });
+  startActivityForResult(std::make_unique<TodoistActivity>(renderer, mappedInput), [](const ActivityResult&) {});
 }
