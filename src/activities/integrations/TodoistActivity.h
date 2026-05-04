@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Activity.h"
+#include "activities/Activity.h"
 #include "MappedInputManager.h"
 #include "integrations/todoist/TodoistClient.h"
 #include "integrations/todoist/TodoistTask.h"
@@ -14,7 +14,7 @@
 class TodoistActivity : public Activity {
  public:
   TodoistActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity(renderer, mappedInput) {}
+      : Activity("Todoist", renderer, mappedInput) {}
 
   void onEnter() override;
   void onExit() override;
@@ -51,5 +51,4 @@ class TodoistActivity : public Activity {
   uint8_t _capturedHour = 0;
   uint8_t _capturedMin = 0;
   ButtonNavigator _navigator;
-  bool _navigatorBound = false;
 };
