@@ -28,6 +28,16 @@ void syncTimeWithNTP() {
   if (retry >= 50) LOG_DBG("TDST", "NTP timeout (using fallback)");
 }
 
+void wifiOff() {
+  if (esp_sntp_enabled()) {
+    esp_sntp_stop();
+  }
+  WiFi.disconnect(false);
+  delay(100);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
+}
+
 }  // namespace
 
 void TodoistActivity::onEnter() {
@@ -43,6 +53,7 @@ void TodoistActivity::onEnter() {
 }
 
 void TodoistActivity::onExit() {
+  wifiOff();
   Activity::onExit();
 }
 
@@ -157,11 +168,15 @@ void TodoistActivity::render(RenderLock&&) {
 void TodoistActivity::renderLoading() {
   renderer.clearScreen();
   GUI.drawPopup(renderer, tr(STR_TODOIST_FETCHING));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void TodoistActivity::renderError() {
   renderer.clearScreen();
   GUI.drawPopup(renderer, I18N.get(_errorStrId));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void TodoistActivity::renderTaskList() {
@@ -176,6 +191,9 @@ void TodoistActivity::renderTaskList() {
            _capturedHour, _capturedMin);
 
   GUI.drawHeader(renderer, Rect(0, 0, pageWidth, metrics.headerHeight), header);
+
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (_tasks.empty()) {
     GUI.drawPopup(renderer, tr(STR_TODOIST_NO_TASKS));
