@@ -6,7 +6,6 @@
 #include "integrations/todoist/TodoistConfig.h"
 #include "util/ScreenshotUtil.h"
 
-#include <ArduinoJson.h>
 #include <HalStorage.h>
 #include <WiFi.h>
 #include <esp_sntp.h>
@@ -175,13 +174,15 @@ StrId TodoistActivity::fetchResultToStrId(todoist::FetchResult r) const {
 }
 
 bool TodoistActivity::writeSnapshotMeta(GfxRenderer::Orientation o) {
-  JsonDocument doc;
-  doc["orientation"] = orientationToString(o);
-  doc["captured_hour"] = _capturedHour;
-  doc["captured_min"] = _capturedMin;
-
-  std::string out;
-  serializeJson(doc, out);
+  char buf[160];
+  int len = snprintf(buf, sizeof(buf),
+                     "{\"orientation\":\"%s\",\"captured_hour\":%u,\"captured_min\":%u}",
+                     orientationToString(o), static_cast<unsigned>(_capturedHour),
+                     static_cast<unsigned>(_capturedMin));
+  if (len <= 0 || len >= static_cast<int>(sizeof(buf))) {
+    LOG_ERR("TDST", "Meta format failed");
+    return false;
+  }
 
   if (Storage.exists(kSnapshotMetaTmpPath)) Storage.remove(kSnapshotMetaTmpPath);
 
@@ -190,9 +191,9 @@ bool TodoistActivity::writeSnapshotMeta(GfxRenderer::Orientation o) {
     LOG_ERR("TDST", "Cannot open meta tmp");
     return false;
   }
-  size_t n = file.write(reinterpret_cast<const uint8_t*>(out.data()), out.size());
+  size_t n = file.write(reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(len));
   file.close();
-  if (n != out.size()) {
+  if (n != static_cast<size_t>(len)) {
     LOG_ERR("TDST", "Short meta write");
     Storage.remove(kSnapshotMetaTmpPath);
     return false;
@@ -214,7 +215,6 @@ void TodoistActivity::captureSnapshotIfNeeded() {
   const auto snapshotOrient = TODOIST_CONFIG.getSnapshotOrientation();
 
   if (activityOrient == snapshotOrient) {
-    renderer.clearScreen();
     renderTaskList();
     if (!ScreenshotUtil::saveFramebufferAsBmp(
             kSnapshotBmpPath, renderer.getFrameBuffer(),
@@ -228,7 +228,6 @@ void TodoistActivity::captureSnapshotIfNeeded() {
 
   // Different orientations: render in snapshot orientation, save, then revert.
   renderer.setOrientation(snapshotOrient);
-  renderer.clearScreen();
   renderTaskList();
   if (!ScreenshotUtil::saveFramebufferAsBmp(
           kSnapshotBmpPath, renderer.getFrameBuffer(),
