@@ -154,6 +154,7 @@ bool TodoistConfig::persist() {
   }
   if (!Storage.rename(kConfigTmpPath, kConfigPath)) {
     LOG_ERR("TDST", "Rename %s -> %s failed", kConfigTmpPath, kConfigPath);
+    Storage.remove(kConfigTmpPath);
     return false;
   }
 
@@ -172,11 +173,13 @@ bool TodoistConfig::forget() {
     ok = false;
   }
 
-  apiToken.clear();
-  sleepScreenEnabled = false;
-  activityOrientation = GfxRenderer::Orientation::Portrait;
-  snapshotOrientation = GfxRenderer::Orientation::Portrait;
-  loaded = false;
+  if (ok) {
+    apiToken.clear();
+    sleepScreenEnabled = false;
+    activityOrientation = GfxRenderer::Orientation::Portrait;
+    snapshotOrientation = GfxRenderer::Orientation::Portrait;
+    loaded = false;
+  }
   return ok;
 }
 
