@@ -201,6 +201,7 @@ bool TodoistActivity::writeSnapshotMeta(GfxRenderer::Orientation o) {
   if (Storage.exists(kSnapshotMetaPath)) Storage.remove(kSnapshotMetaPath);
   if (!Storage.rename(kSnapshotMetaTmpPath, kSnapshotMetaPath)) {
     LOG_ERR("TDST", "Meta rename failed");
+    Storage.remove(kSnapshotMetaTmpPath);
     return false;
   }
   return true;
