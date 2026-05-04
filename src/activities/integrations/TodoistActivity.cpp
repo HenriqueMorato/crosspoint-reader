@@ -4,7 +4,10 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "integrations/todoist/TodoistConfig.h"
+#include "util/ScreenshotUtil.h"
 
+#include <ArduinoJson.h>
+#include <HalStorage.h>
 #include <WiFi.h>
 #include <esp_sntp.h>
 
@@ -13,6 +16,20 @@
 #include <cstring>
 
 namespace {
+
+constexpr const char* kSnapshotBmpPath = "/.crosspoint/todoist_sleep.bmp";
+constexpr const char* kSnapshotMetaPath = "/.crosspoint/todoist_sleep.meta";
+constexpr const char* kSnapshotMetaTmpPath = "/.crosspoint/todoist_sleep.meta.tmp";
+
+const char* orientationToString(GfxRenderer::Orientation o) {
+  switch (o) {
+    case GfxRenderer::Orientation::Portrait: return "portrait";
+    case GfxRenderer::Orientation::PortraitInverted: return "portrait_inverted";
+    case GfxRenderer::Orientation::LandscapeClockwise: return "landscape_cw";
+    case GfxRenderer::Orientation::LandscapeCounterClockwise: return "landscape_ccw";
+  }
+  return "portrait";
+}
 
 void syncTimeWithNTP() {
   if (esp_sntp_enabled()) esp_sntp_stop();
@@ -136,6 +153,7 @@ void TodoistActivity::proceedWithFetch() {
     _capturedMin = static_cast<uint8_t>(tm_now.tm_min);
     _state = State::ShowingTasks;
     _scrollOffset = 0;
+    captureSnapshotIfNeeded();
   } else {
     _state = State::ShowingError;
     _errorStrId = fetchResultToStrId(r);
@@ -154,6 +172,71 @@ StrId TodoistActivity::fetchResultToStrId(todoist::FetchResult r) const {
     case FetchResult::ParseError:
     default:                        return StrId::STR_TODOIST_FETCH_FAILED;
   }
+}
+
+bool TodoistActivity::writeSnapshotMeta(GfxRenderer::Orientation o) {
+  JsonDocument doc;
+  doc["orientation"] = orientationToString(o);
+  doc["captured_hour"] = _capturedHour;
+  doc["captured_min"] = _capturedMin;
+
+  std::string out;
+  serializeJson(doc, out);
+
+  if (Storage.exists(kSnapshotMetaTmpPath)) Storage.remove(kSnapshotMetaTmpPath);
+
+  HalFile file;
+  if (!Storage.openFileForWrite("TDST", kSnapshotMetaTmpPath, file)) {
+    LOG_ERR("TDST", "Cannot open meta tmp");
+    return false;
+  }
+  size_t n = file.write(reinterpret_cast<const uint8_t*>(out.data()), out.size());
+  file.close();
+  if (n != out.size()) {
+    LOG_ERR("TDST", "Short meta write");
+    Storage.remove(kSnapshotMetaTmpPath);
+    return false;
+  }
+
+  if (Storage.exists(kSnapshotMetaPath)) Storage.remove(kSnapshotMetaPath);
+  if (!Storage.rename(kSnapshotMetaTmpPath, kSnapshotMetaPath)) {
+    LOG_ERR("TDST", "Meta rename failed");
+    return false;
+  }
+  return true;
+}
+
+void TodoistActivity::captureSnapshotIfNeeded() {
+  if (_state != State::ShowingTasks) return;
+
+  const auto activityOrient = TODOIST_CONFIG.getActivityOrientation();
+  const auto snapshotOrient = TODOIST_CONFIG.getSnapshotOrientation();
+
+  if (activityOrient == snapshotOrient) {
+    renderer.clearScreen();
+    renderTaskList();
+    if (!ScreenshotUtil::saveFramebufferAsBmp(
+            kSnapshotBmpPath, renderer.getFrameBuffer(),
+            renderer.getDisplayWidth(), renderer.getDisplayHeight())) {
+      LOG_ERR("TDST", "Snapshot save failed");
+    } else {
+      writeSnapshotMeta(snapshotOrient);
+    }
+    return;
+  }
+
+  // Different orientations: render in snapshot orientation, save, then revert.
+  renderer.setOrientation(snapshotOrient);
+  renderer.clearScreen();
+  renderTaskList();
+  if (!ScreenshotUtil::saveFramebufferAsBmp(
+          kSnapshotBmpPath, renderer.getFrameBuffer(),
+          renderer.getDisplayWidth(), renderer.getDisplayHeight())) {
+    LOG_ERR("TDST", "Snapshot save failed");
+  } else {
+    writeSnapshotMeta(snapshotOrient);
+  }
+  renderer.setOrientation(activityOrient);
 }
 
 void TodoistActivity::render(RenderLock&&) {

@@ -44,6 +44,9 @@ class TodoistActivity : public Activity {
   void renderError();
   void renderTaskList();
 
+  void captureSnapshotIfNeeded();
+  bool writeSnapshotMeta(GfxRenderer::Orientation o);
+
   std::vector<todoist::TodoistTask> _tasks;
   State _state = State::Loading;
   int _scrollOffset = 0;
