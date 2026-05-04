@@ -13,6 +13,8 @@ namespace {
 constexpr const char* kConfigPath = "/.crosspoint/todoist.json";
 constexpr const char* kConfigTmpPath = "/.crosspoint/todoist.json.tmp";
 constexpr const char* kSnapshotBmpPath = "/.crosspoint/todoist_sleep.bmp";
+constexpr const char* kSnapshotMetaPath = "/.crosspoint/todoist_sleep.meta";
+constexpr const char* kSnapshotMetaTmpPath = "/.crosspoint/todoist_sleep.meta.tmp";
 
 const char* orientationToString(GfxRenderer::Orientation o) {
   switch (o) {
@@ -172,6 +174,13 @@ bool TodoistConfig::forget() {
     LOG_ERR("TDST", "Could not remove %s", kSnapshotBmpPath);
     ok = false;
   }
+  if (Storage.exists(kSnapshotMetaPath) && !Storage.remove(kSnapshotMetaPath)) {
+    LOG_ERR("TDST", "Could not remove %s", kSnapshotMetaPath);
+    ok = false;
+  }
+  // Best-effort cleanup of orphaned tmp files from any prior failed write.
+  Storage.remove(kConfigTmpPath);
+  Storage.remove(kSnapshotMetaTmpPath);
 
   if (ok) {
     apiToken.clear();
