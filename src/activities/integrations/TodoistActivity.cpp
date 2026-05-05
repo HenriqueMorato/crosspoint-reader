@@ -84,6 +84,8 @@ void TodoistActivity::onEnter() {
 
   _state = State::Loading;
   _scrollOffset = 0;
+  _selectedIndex = 0;
+  _lastVisibleIndex = -1;
   _tasks.clear();
 
   requestUpdate(true);  // paint Loading screen
@@ -119,20 +121,26 @@ void TodoistActivity::loop() {
     return;
   }
 
-  // Scroll: ButtonNavigator polls each loop iteration.
+  // Cursor navigation. The visible window only shifts when the cursor would
+  // otherwise leave it, which keeps tasks above the cursor on screen until
+  // the cursor actually scrolls past them.
   _navigator.onNext([this] {
     if (_state != State::ShowingTasks) return;
-    if (_scrollOffset + 1 < static_cast<int>(_tasks.size())) {
+    if (_selectedIndex + 1 >= static_cast<int>(_tasks.size())) return;
+    ++_selectedIndex;
+    if (_lastVisibleIndex >= 0 && _selectedIndex > _lastVisibleIndex) {
       ++_scrollOffset;
-      requestUpdate();
     }
+    requestUpdate();
   });
   _navigator.onPrevious([this] {
     if (_state != State::ShowingTasks) return;
-    if (_scrollOffset > 0) {
-      --_scrollOffset;
-      requestUpdate();
+    if (_selectedIndex == 0) return;
+    --_selectedIndex;
+    if (_selectedIndex < _scrollOffset) {
+      _scrollOffset = _selectedIndex;
     }
+    requestUpdate();
   });
 }
 
@@ -197,6 +205,8 @@ void TodoistActivity::proceedWithFetch() {
 
     _state = State::ShowingTasks;
     _scrollOffset = 0;
+    _selectedIndex = 0;
+    _lastVisibleIndex = -1;
     captureSnapshotIfNeeded();
   } else {
     _state = State::ShowingError;
@@ -375,9 +385,11 @@ void TodoistActivity::renderTaskList(bool drawHints) {
 
   const int totalTasks = static_cast<int>(_tasks.size());
   if (_scrollOffset > totalTasks - 1) _scrollOffset = std::max(0, totalTasks - 1);
+  if (_selectedIndex > totalTasks - 1) _selectedIndex = std::max(0, totalTasks - 1);
 
   int y = contentTop;
   int rendered = 0;
+  int lastFullyVisible = -1;
   for (int taskIdx = _scrollOffset; taskIdx < totalTasks; ++taskIdx) {
     const auto& t = _tasks[taskIdx];
 
@@ -408,6 +420,14 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     const int taskHeight = static_cast<int>(lines.size()) * lineHeight;
     if (y + taskHeight > contentTop + contentHeight) break;  // would clip
 
+    const bool selected = (taskIdx == _selectedIndex);
+    if (selected) {
+      // Full-row selection background. Pad vertically so the fill brackets
+      // both glyph and text rows cleanly, regardless of the wrapped line
+      // count for this task.
+      renderer.fillRect(0, y - 2, pageWidth, taskHeight + 4, true);
+    }
+
     // Marker aligned with the first line baseline. Overdue takes precedence
     // over future (an overdue task can't be future, but the order makes the
     // intent explicit). The future glyph "›" hints at "upcoming" without
@@ -415,16 +435,18 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     const char* marker = t.overdue   ? kBulletOverdue
                          : isFuture  ? kBulletFuture
                                      : kBulletNormal;
-    renderer.drawText(UI_10_FONT_ID, kSidePadding, y + lineHeight - 4, marker, true);
+    renderer.drawText(UI_10_FONT_ID, kSidePadding, y + lineHeight - 4, marker, !selected);
 
     for (size_t li = 0; li < lines.size(); ++li) {
       renderer.drawText(UI_10_FONT_ID, textX, y + (static_cast<int>(li) + 1) * lineHeight - 4,
-                        lines[li].c_str(), true);
+                        lines[li].c_str(), !selected);
     }
 
     y += taskHeight + kRowGap;
     rendered++;
+    lastFullyVisible = taskIdx;
   }
+  _lastVisibleIndex = lastFullyVisible;
 
   // Scroll bar when there are tasks below the visible window.
   if (rendered < totalTasks - _scrollOffset || _scrollOffset > 0) {

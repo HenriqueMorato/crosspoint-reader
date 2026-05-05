@@ -52,7 +52,16 @@ class TodoistActivity : public Activity {
 
   std::vector<todoist::TodoistTask> _tasks;
   State _state = State::Loading;
+  // First task index in the visible window. Advances only when the cursor
+  // crosses out of the window — i.e. window is cursor-driven, not free-scroll.
   int _scrollOffset = 0;
+  // Highlighted task. Independent of _scrollOffset so the user can move the
+  // cursor through the visible band without scrolling.
+  int _selectedIndex = 0;
+  // Index of the last task that fully rendered in the previous frame. Used by
+  // the navigator to decide whether moving the cursor forward also has to
+  // advance _scrollOffset. Updated at the end of each renderTaskList().
+  int _lastVisibleIndex = -1;
   StrId _errorStrId = StrId::STR_TODOIST_FETCH_FAILED;
   uint8_t _capturedHour = 0;
   uint8_t _capturedMin = 0;
