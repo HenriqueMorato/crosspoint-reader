@@ -351,14 +351,19 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   // wrapped lines), with a small gap between tasks. No separator lines —
   // the bullet glyph is the row delimiter.
   constexpr int kSidePadding = 20;
-  constexpr const char* kBullet = "\xE2\x80\xA2";  // U+2022 BULLET
+  constexpr const char* kBulletNormal = "\xE2\x80\xA2";  // U+2022 BULLET
+  constexpr const char* kBulletOverdue = "!";            // overdue marker
   constexpr int kBulletGap = 8;     // px between bullet and title
   constexpr int kRowGap = 6;        // px between consecutive tasks
   constexpr int kMaxLines = 2;
 
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-  const int bulletWidth = renderer.getTextWidth(UI_10_FONT_ID, kBullet);
-  const int textX = kSidePadding + bulletWidth + kBulletGap;
+  // Reserve space for the widest possible glyph so the text column lines up
+  // regardless of which marker each row ends up using.
+  const int bulletColWidth = std::max(
+      renderer.getTextWidth(UI_10_FONT_ID, kBulletNormal),
+      renderer.getTextWidth(UI_10_FONT_ID, kBulletOverdue));
+  const int textX = kSidePadding + bulletColWidth + kBulletGap;
   const int textWidth = pageWidth - kSidePadding - textX;
 
   const int totalTasks = static_cast<int>(_tasks.size());
@@ -370,8 +375,7 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     const auto& t = _tasks[taskIdx];
 
     char fullTitle[128];
-    snprintf(fullTitle, sizeof(fullTitle), "%s%s%s%s",
-             t.overdue ? "[!] " : "",
+    snprintf(fullTitle, sizeof(fullTitle), "%s%s%s",
              t.dueTime[0] ? t.dueTime : "",
              t.dueTime[0] ? "  " : "",
              t.title);
@@ -380,8 +384,11 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     const int taskHeight = static_cast<int>(lines.size()) * lineHeight;
     if (y + taskHeight > contentTop + contentHeight) break;  // would clip
 
-    // Bullet aligned with the first line baseline.
-    renderer.drawText(UI_10_FONT_ID, kSidePadding, y + lineHeight - 4, kBullet, true);
+    // Marker aligned with the first line baseline. Overdue tasks swap the
+    // bullet for an exclamation mark so the row visually stands out without
+    // wasting horizontal space on a "[!]" prefix.
+    const char* marker = t.overdue ? kBulletOverdue : kBulletNormal;
+    renderer.drawText(UI_10_FONT_ID, kSidePadding, y + lineHeight - 4, marker, true);
 
     for (size_t li = 0; li < lines.size(); ++li) {
       renderer.drawText(UI_10_FONT_ID, textX, y + (static_cast<int>(li) + 1) * lineHeight - 4,
