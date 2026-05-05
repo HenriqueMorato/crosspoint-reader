@@ -56,5 +56,9 @@ class TodoistActivity : public Activity {
   StrId _errorStrId = StrId::STR_TODOIST_FETCH_FAILED;
   uint8_t _capturedHour = 0;
   uint8_t _capturedMin = 0;
+  // Snapshot of renderer orientation at onEnter() so we can restore it on
+  // exit. Without this, switching activity orientation in TodoistConfig
+  // leaks into HomeActivity (and corrupts its cached coverBuffer).
+  GfxRenderer::Orientation _entryOrientation = GfxRenderer::Orientation::Portrait;
   ButtonNavigator _navigator;
 };

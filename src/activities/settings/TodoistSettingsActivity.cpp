@@ -66,12 +66,13 @@ void TodoistSettingsActivity::handleSelection() {
 }
 
 GfxRenderer::Orientation TodoistSettingsActivity::nextOrientation(GfxRenderer::Orientation current) const {
+  // Cycle in physical clockwise rotation: each step rotates the device 90° CW.
   switch (current) {
     case GfxRenderer::Orientation::Portrait:
-      return GfxRenderer::Orientation::PortraitInverted;
-    case GfxRenderer::Orientation::PortraitInverted:
       return GfxRenderer::Orientation::LandscapeClockwise;
     case GfxRenderer::Orientation::LandscapeClockwise:
+      return GfxRenderer::Orientation::PortraitInverted;
+    case GfxRenderer::Orientation::PortraitInverted:
       return GfxRenderer::Orientation::LandscapeCounterClockwise;
     case GfxRenderer::Orientation::LandscapeCounterClockwise:
     default:

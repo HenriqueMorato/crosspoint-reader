@@ -79,6 +79,7 @@ void wifiOff() {
 
 void TodoistActivity::onEnter() {
   Activity::onEnter();
+  _entryOrientation = renderer.getOrientation();
   renderer.setOrientation(TODOIST_CONFIG.getActivityOrientation());
 
   _state = State::Loading;
@@ -91,6 +92,9 @@ void TodoistActivity::onEnter() {
 
 void TodoistActivity::onExit() {
   wifiOff();
+  // Restore orientation so HomeActivity (and its cached coverBuffer) are
+  // displayed in the orientation they were rendered in.
+  renderer.setOrientation(_entryOrientation);
   Activity::onExit();
 }
 

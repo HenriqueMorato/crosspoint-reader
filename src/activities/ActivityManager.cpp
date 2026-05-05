@@ -10,6 +10,7 @@
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
+#include "integrations/TodoistActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
@@ -188,6 +189,10 @@ void ActivityManager::goToBrowser() {
   } else {
     replaceActivity(std::make_unique<OpdsServerListActivity>(renderer, mappedInput, true));
   }
+}
+
+void ActivityManager::goToTodoist() {
+  replaceActivity(std::make_unique<TodoistActivity>(renderer, mappedInput));
 }
 
 void ActivityManager::goToReader(std::string path) {

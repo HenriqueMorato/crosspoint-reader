@@ -17,7 +17,6 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
-#include "activities/integrations/TodoistActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -281,10 +280,4 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
 
-void HomeActivity::onTodoistOpen() {
-  // Free the ~48 KB cover snapshot before Todoist launches — WiFi + TLS
-  // handshake need every byte of heap they can get on ESP32-C3. The cover
-  // gets re-rendered from disk on the way back via the normal render path.
-  freeCoverBuffer();
-  startActivityForResult(std::make_unique<TodoistActivity>(renderer, mappedInput), [](const ActivityResult&) {});
-}
+void HomeActivity::onTodoistOpen() { activityManager.goToTodoist(); }
