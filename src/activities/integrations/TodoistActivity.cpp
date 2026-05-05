@@ -332,7 +332,10 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   snprintf(header, sizeof(header), I18N.get(StrId::STR_TODOIST_TODAY_HEADER),
            _capturedHour, _capturedMin);
 
-  GUI.drawHeader(renderer, Rect(0, 0, pageWidth, metrics.headerHeight), header);
+  // Match the offset every other activity uses: header sits below topPadding,
+  // not flush against the screen edge. Without this, the Lyra theme's 3px
+  // header underline lands a few pixels too high and looks like a stray rule.
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, header);
 
   if (!drawHints) {
     // Snapshot mode — paint over the battery icon + percentage text drawn by
@@ -340,8 +343,8 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     // when the snapshot was taken, not when the screen is being viewed.
     // 80px matches BaseTheme's reserved battery region.
     constexpr int kBatteryRegionWidth = 80;
-    renderer.fillRect(pageWidth - kBatteryRegionWidth, 5, kBatteryRegionWidth,
-                      metrics.batteryHeight + 10, false);
+    renderer.fillRect(pageWidth - kBatteryRegionWidth, metrics.topPadding + 5,
+                      kBatteryRegionWidth, metrics.batteryHeight + 10, false);
   }
 
   if (drawHints) {
@@ -354,7 +357,7 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     return;
   }
 
-  const int contentTop = metrics.headerHeight + metrics.verticalSpacing;
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   // Match TodoistSettingsActivity: reserve verticalSpacing*2 above the hint
   // bar so tasks don't overlap the hint row in landscape, where the hint
   // strip is closer to the content edge than in portrait.
@@ -365,12 +368,18 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   // Compact bullet list. Each task gets only the height it needs (1 or 2
   // wrapped lines), with a small gap between tasks. No separator lines —
   // the bullet glyph is the row delimiter.
-  constexpr int kSidePadding = 20;
+  // No outlines — the only visible chrome is a light-grey rounded fill
+  // behind the cursor row, matching the Lyra home menu's selection style.
+  // Variable row height is kept so 2-line task titles don't get truncated.
+  const int sidePadding = metrics.contentSidePadding;
   constexpr const char* kBulletNormal = "\xE2\x80\xA2";   // U+2022 BULLET — today / undated
   constexpr const char* kBulletOverdue = "!";              // overdue marker
   constexpr const char* kBulletFuture = "\xE2\x80\xBA";   // U+203A SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
-  constexpr int kBulletGap = 8;     // px between bullet and title
-  constexpr int kRowGap = 6;        // px between consecutive tasks
+  constexpr int kTilePaddingX = 10;  // inner horizontal padding inside the cursor band
+  constexpr int kTilePaddingY = 6;   // inner vertical padding above/below text
+  constexpr int kBulletGap = 8;      // px between bullet and title
+  constexpr int kRowGap = 2;         // px between consecutive task rows
+  constexpr int kCursorRadius = 6;   // matches Lyra menu cornerRadius
   constexpr int kMaxLines = 2;
 
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
@@ -380,8 +389,11 @@ void TodoistActivity::renderTaskList(bool drawHints) {
       renderer.getTextWidth(UI_10_FONT_ID, kBulletNormal),
       renderer.getTextWidth(UI_10_FONT_ID, kBulletOverdue),
       renderer.getTextWidth(UI_10_FONT_ID, kBulletFuture)});
-  const int textX = kSidePadding + bulletColWidth + kBulletGap;
-  const int textWidth = pageWidth - kSidePadding - textX;
+
+  const int tileX = sidePadding;
+  const int tileWidth = pageWidth - sidePadding * 2;
+  const int textX = tileX + kTilePaddingX + bulletColWidth + kBulletGap;
+  const int textWidth = tileX + tileWidth - kTilePaddingX - textX;
 
   const int totalTasks = static_cast<int>(_tasks.size());
   if (_scrollOffset > totalTasks - 1) _scrollOffset = std::max(0, totalTasks - 1);
@@ -417,15 +429,16 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     }
 
     auto lines = renderer.wrappedText(UI_10_FONT_ID, fullTitle, textWidth, kMaxLines);
-    const int taskHeight = static_cast<int>(lines.size()) * lineHeight;
-    if (y + taskHeight > contentTop + contentHeight) break;  // would clip
+    const int textBlockHeight = static_cast<int>(lines.size()) * lineHeight;
+    const int tileHeight = textBlockHeight + kTilePaddingY * 2;
+    if (y + tileHeight > contentTop + contentHeight) break;  // would clip
 
-    const bool selected = (taskIdx == _selectedIndex);
+    // Cursor band is suppressed in snapshot mode (drawHints=false): the sleep
+    // screen has no buttons, so showing the user's last selection there is
+    // misleading — they can't act on it, and it just adds visual noise.
+    const bool selected = drawHints && (taskIdx == _selectedIndex);
     if (selected) {
-      // Full-row selection background. Pad vertically so the fill brackets
-      // both glyph and text rows cleanly, regardless of the wrapped line
-      // count for this task.
-      renderer.fillRect(0, y - 2, pageWidth, taskHeight + 4, true);
+      renderer.fillRoundedRect(tileX, y, tileWidth, tileHeight, kCursorRadius, Color::LightGray);
     }
 
     // Marker aligned with the first line baseline. Overdue takes precedence
@@ -435,14 +448,19 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     const char* marker = t.overdue   ? kBulletOverdue
                          : isFuture  ? kBulletFuture
                                      : kBulletNormal;
-    renderer.drawText(UI_10_FONT_ID, kSidePadding, y + lineHeight - 4, marker, !selected);
+    // drawText anchors y to the TOP of the text (it adds the ascender
+    // internally), so the first line's y is just tile-top + tile padding.
+    const int markerX = tileX + kTilePaddingX;
+    const int firstLineY = y + kTilePaddingY;
+    renderer.drawText(UI_10_FONT_ID, markerX, firstLineY, marker, true);
 
     for (size_t li = 0; li < lines.size(); ++li) {
-      renderer.drawText(UI_10_FONT_ID, textX, y + (static_cast<int>(li) + 1) * lineHeight - 4,
-                        lines[li].c_str(), !selected);
+      renderer.drawText(UI_10_FONT_ID, textX,
+                        firstLineY + static_cast<int>(li) * lineHeight,
+                        lines[li].c_str(), true);
     }
 
-    y += taskHeight + kRowGap;
+    y += tileHeight + kRowGap;
     rendered++;
     lastFullyVisible = taskIdx;
   }
