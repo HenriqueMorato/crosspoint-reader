@@ -34,6 +34,21 @@ const char* orientationToString(GfxRenderer::Orientation o) {
   return "portrait";
 }
 
+// Apply the user's GMT offset to newlib's TZ state so localtime_r returns
+// wall-clock time matching their locale. Civil "GMT-3" means 3 hours
+// behind UTC; POSIX-TZ inverts the sign convention (positive = west of
+// UTC), so we negate before formatting. Snap to 0 on overflow rather
+// than crash — the config layer already clamps, but defence in depth is
+// cheap here.
+void applyTimezone() {
+  int8_t off = TODOIST_CONFIG.getGmtOffset();
+  if (off < -12 || off > 14) off = 0;
+  char tzBuf[16];
+  snprintf(tzBuf, sizeof(tzBuf), "GMT%+d", -static_cast<int>(off));
+  setenv("TZ", tzBuf, 1);
+  tzset();
+}
+
 // Try NTP first. If it times out, set the clock to the firmware's build
 // date so TLS cert validation can still succeed — mbedTLS rejects certs
 // whose notBefore lies in the future relative to the device clock, and
@@ -174,6 +189,10 @@ void TodoistActivity::startFetch() {
 }
 
 void TodoistActivity::proceedWithFetch() {
+  // Order matters: apply TZ before NTP so the first localtime_r() in the
+  // fetch path uses the user's offset, and before any date-bounded query
+  // builder reads time(nullptr).
+  applyTimezone();
   syncTimeWithNTP();
 
   using todoist::FetchResult;
@@ -188,6 +207,8 @@ void TodoistActivity::proceedWithFetch() {
     localtime_r(&now, &tm_now);
     _capturedHour = static_cast<uint8_t>(tm_now.tm_hour);
     _capturedMin = static_cast<uint8_t>(tm_now.tm_min);
+    _capturedDay = static_cast<uint8_t>(tm_now.tm_mday);
+    _capturedMonth = static_cast<uint8_t>(tm_now.tm_mon + 1);
     strftime(_today, sizeof(_today), "%Y-%m-%d", &tm_now);
 
     // Chronological sort: oldest overdue first, then today's timed tasks in
@@ -333,7 +354,7 @@ void TodoistActivity::renderTaskList(bool drawHints) {
 
   char header[64];
   snprintf(header, sizeof(header), I18N.get(StrId::STR_TODOIST_TODAY_HEADER),
-           _capturedHour, _capturedMin);
+           _capturedDay, _capturedMonth, _capturedHour, _capturedMin);
 
   // Match the offset every other activity uses: header sits below topPadding,
   // not flush against the screen edge. Without this, the Lyra theme's 3px

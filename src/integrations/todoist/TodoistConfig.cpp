@@ -86,6 +86,7 @@ bool TodoistConfig::load() {
   snapshotOrientation = GfxRenderer::Orientation::Portrait;
   dateFilter = DateFilter::Today;
   overdueFilter = OverdueFilter::Last7Days;
+  gmtOffset = 0;
 
   if (!Storage.exists(kConfigPath)) {
     LOG_DBG("TDST", "No config at %s", kConfigPath);
@@ -137,6 +138,13 @@ bool TodoistConfig::load() {
       doc["overdue_filter"] | static_cast<const char*>(nullptr),
       OverdueFilter::Last7Days);
 
+  // Clamp on load: a corrupt or hand-edited file shouldn't be able to set
+  // a wild offset that produces nonsense local time.
+  int rawOffset = doc["gmt_offset"] | 0;
+  if (rawOffset < -12) rawOffset = -12;
+  if (rawOffset > 14)  rawOffset = 14;
+  gmtOffset = static_cast<int8_t>(rawOffset);
+
   loaded = true;
   LOG_DBG("TDST", "Config loaded (token=%s, sleep=%d)",
           apiToken.empty() ? "no" : "yes", sleepScreenEnabled);
@@ -177,6 +185,14 @@ bool TodoistConfig::setOverdueFilter(OverdueFilter f) {
   return persist();
 }
 
+bool TodoistConfig::setGmtOffset(int8_t hours) {
+  if (hours < -12) hours = -12;
+  if (hours > 14)  hours = 14;
+  if (hours == gmtOffset) return true;
+  gmtOffset = hours;
+  return persist();
+}
+
 bool TodoistConfig::persist() {
   JsonDocument doc;
   doc["api_token"] = apiToken;
@@ -185,6 +201,7 @@ bool TodoistConfig::persist() {
   doc["snapshot_orientation"] = orientationToString(snapshotOrientation);
   doc["date_filter"] = dateFilterToString(dateFilter);
   doc["overdue_filter"] = overdueFilterToString(overdueFilter);
+  doc["gmt_offset"] = static_cast<int>(gmtOffset);
 
   // Atomic write: serialize to .tmp, close, rename to final path.
   if (Storage.exists(kConfigTmpPath)) {
@@ -247,6 +264,7 @@ bool TodoistConfig::forget() {
     snapshotOrientation = GfxRenderer::Orientation::Portrait;
     dateFilter = DateFilter::Today;
     overdueFilter = OverdueFilter::Last7Days;
+    gmtOffset = 0;
     loaded = false;
   }
   return ok;

@@ -65,6 +65,12 @@ class TodoistActivity : public Activity {
   StrId _errorStrId = StrId::STR_TODOIST_FETCH_FAILED;
   uint8_t _capturedHour = 0;
   uint8_t _capturedMin = 0;
+  // dd/mm at fetch time, in the user's configured timezone. Stored
+  // separately from _today (which is YYYY-MM-DD and used for the
+  // future-vs-today comparison) so the header can render quickly without
+  // re-parsing.
+  uint8_t _capturedDay = 0;
+  uint8_t _capturedMonth = 0;
   // "YYYY-MM-DD" snapshot of today's date at fetch time. Used to classify
   // tasks as future (dueDate strictly greater than this) so they render
   // with a distinct glyph and a date suffix.

@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 
+#include <cstdint>
 #include <string>
 
 namespace todoist {
@@ -60,6 +61,13 @@ class TodoistConfig {
   // Sleep-screen snapshot orientation.
   GfxRenderer::Orientation getSnapshotOrientation() const { return snapshotOrientation; }
 
+  // GMT offset in whole hours (-12..+14). The user-facing convention
+  // matches civil usage: "GMT-3" means 3 hours behind UTC. Applied to the
+  // C runtime via setenv("TZ", ...) so localtime_r returns wall-clock
+  // time matching the user's locale. Range covers every standard zone;
+  // half-hour offsets (India, Nepal) are not supported in v1.
+  int8_t getGmtOffset() const { return gmtOffset; }
+
   // Setters. Each performs a value-change check and an atomic write
   // (.tmp + rename) on change. Returns false on persistence failure.
   bool setSleepScreenEnabled(bool enabled);
@@ -67,6 +75,7 @@ class TodoistConfig {
   bool setSnapshotOrientation(GfxRenderer::Orientation o);
   bool setDateFilter(DateFilter f);
   bool setOverdueFilter(OverdueFilter f);
+  bool setGmtOffset(int8_t hours);
 
   // Token convenience: true when token is non-empty and >= 20 chars.
   bool hasValidToken() const;
@@ -89,6 +98,7 @@ class TodoistConfig {
   GfxRenderer::Orientation snapshotOrientation = GfxRenderer::Orientation::Portrait;
   DateFilter dateFilter = DateFilter::Today;
   OverdueFilter overdueFilter = OverdueFilter::Last7Days;
+  int8_t gmtOffset = 0;
   bool loaded = false;
 };
 

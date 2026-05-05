@@ -57,6 +57,24 @@ todoist::OverdueFilter nextOverdueFilter(todoist::OverdueFilter f) {
   return todoist::OverdueFilter::Last7Days;
 }
 
+// Step the GMT offset by +1 hour, wrapping +14 → -12. Whole-hour zones
+// only; half-hour offsets (India, Nepal) are not represented in v1.
+int8_t nextGmtOffset(int8_t current) {
+  int next = static_cast<int>(current) + 1;
+  if (next > 14) next = -12;
+  return static_cast<int8_t>(next);
+}
+
+// "GMT+0", "GMT-3", "GMT+5". %+d always emits a sign so the value lines
+// up regardless of polarity. Returned pointer is to a function-local
+// static — only safe to call once per render frame, which is the case
+// here (settings list invokes the value-formatter once per row).
+const char* gmtOffsetLabel(int8_t offset) {
+  static char buf[8];
+  snprintf(buf, sizeof(buf), "GMT%+d", static_cast<int>(offset));
+  return buf;
+}
+
 }  // namespace
 
 void TodoistSettingsActivity::onEnter() {
@@ -105,6 +123,9 @@ void TodoistSettingsActivity::handleSelection() {
       TODOIST_CONFIG.setOverdueFilter(nextOverdueFilter(TODOIST_CONFIG.getOverdueFilter()));
       return;
     case 5:
+      TODOIST_CONFIG.setGmtOffset(nextGmtOffset(TODOIST_CONFIG.getGmtOffset()));
+      return;
+    case 6:
       TODOIST_CONFIG.forget();
       return;
   }
@@ -146,7 +167,8 @@ void TodoistSettingsActivity::render(RenderLock&&) {
           case 2: return std::string(tr(STR_TODOIST_SNAPSHOT_ORIENTATION));
           case 3: return std::string(tr(STR_TODOIST_DATE_FILTER));
           case 4: return std::string(tr(STR_TODOIST_OVERDUE_FILTER));
-          case 5: return std::string(tr(STR_TODOIST_FORGET));
+          case 5: return std::string(tr(STR_TODOIST_TIMEZONE));
+          case 6: return std::string(tr(STR_TODOIST_FORGET));
         }
         return "";
       },
@@ -158,7 +180,8 @@ void TodoistSettingsActivity::render(RenderLock&&) {
           case 2: return std::string(orientationLabel(TODOIST_CONFIG.getSnapshotOrientation()));
           case 3: return std::string(dateFilterLabel(TODOIST_CONFIG.getDateFilter()));
           case 4: return std::string(overdueFilterLabel(TODOIST_CONFIG.getOverdueFilter()));
-          case 5: return std::string("");
+          case 5: return std::string(gmtOffsetLabel(TODOIST_CONFIG.getGmtOffset()));
+          case 6: return std::string("");
         }
         return "";
       },
