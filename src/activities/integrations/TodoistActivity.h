@@ -56,6 +56,10 @@ class TodoistActivity : public Activity {
   StrId _errorStrId = StrId::STR_TODOIST_FETCH_FAILED;
   uint8_t _capturedHour = 0;
   uint8_t _capturedMin = 0;
+  // "YYYY-MM-DD" snapshot of today's date at fetch time. Used to classify
+  // tasks as future (dueDate strictly greater than this) so they render
+  // with a distinct glyph and a date suffix.
+  char _today[11] = "";
   // Snapshot of renderer orientation at onEnter() so we can restore it on
   // exit. Without this, switching activity orientation in TodoistConfig
   // leaks into HomeActivity (and corrupts its cached coverBuffer).

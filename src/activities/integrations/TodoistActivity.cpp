@@ -177,6 +177,7 @@ void TodoistActivity::proceedWithFetch() {
     localtime_r(&now, &tm_now);
     _capturedHour = static_cast<uint8_t>(tm_now.tm_hour);
     _capturedMin = static_cast<uint8_t>(tm_now.tm_min);
+    strftime(_today, sizeof(_today), "%Y-%m-%d", &tm_now);
 
     // Chronological sort: oldest overdue first, then today's timed tasks in
     // ascending time, then today's untimed tasks last. dueDate is "YYYY-MM-DD"
@@ -355,8 +356,9 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   // wrapped lines), with a small gap between tasks. No separator lines —
   // the bullet glyph is the row delimiter.
   constexpr int kSidePadding = 20;
-  constexpr const char* kBulletNormal = "\xE2\x80\xA2";  // U+2022 BULLET
-  constexpr const char* kBulletOverdue = "!";            // overdue marker
+  constexpr const char* kBulletNormal = "\xE2\x80\xA2";   // U+2022 BULLET — today / undated
+  constexpr const char* kBulletOverdue = "!";              // overdue marker
+  constexpr const char* kBulletFuture = "\xE2\x80\xBA";   // U+203A SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
   constexpr int kBulletGap = 8;     // px between bullet and title
   constexpr int kRowGap = 6;        // px between consecutive tasks
   constexpr int kMaxLines = 2;
@@ -364,9 +366,10 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   // Reserve space for the widest possible glyph so the text column lines up
   // regardless of which marker each row ends up using.
-  const int bulletColWidth = std::max(
+  const int bulletColWidth = std::max({
       renderer.getTextWidth(UI_10_FONT_ID, kBulletNormal),
-      renderer.getTextWidth(UI_10_FONT_ID, kBulletOverdue));
+      renderer.getTextWidth(UI_10_FONT_ID, kBulletOverdue),
+      renderer.getTextWidth(UI_10_FONT_ID, kBulletFuture)});
   const int textX = kSidePadding + bulletColWidth + kBulletGap;
   const int textWidth = pageWidth - kSidePadding - textX;
 
@@ -378,20 +381,40 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   for (int taskIdx = _scrollOffset; taskIdx < totalTasks; ++taskIdx) {
     const auto& t = _tasks[taskIdx];
 
+    // A task is "future" when it has a dueDate strictly later than today.
+    // Empty dueDate counts as today (Todoist filter "today" returns these).
+    const bool isFuture =
+        _today[0] != '\0' && t.dueDate[0] != '\0' && strcmp(t.dueDate, _today) > 0;
+
     char fullTitle[128];
-    snprintf(fullTitle, sizeof(fullTitle), "%s%s%s",
-             t.dueTime[0] ? t.dueTime : "",
-             t.dueTime[0] ? "  " : "",
-             t.title);
+    if (isFuture) {
+      // Show MM-DD prefix so the user can see when each future item is due.
+      // Skip the "YYYY-" prefix to save horizontal space; year is implied by
+      // context (filter range never spans more than a few weeks).
+      const char* monthDay = t.dueDate + 5;  // "YYYY-MM-DD" -> "MM-DD"
+      snprintf(fullTitle, sizeof(fullTitle), "%s%s%s  %s",
+               monthDay,
+               t.dueTime[0] ? " " : "",
+               t.dueTime[0] ? t.dueTime : "",
+               t.title);
+    } else {
+      snprintf(fullTitle, sizeof(fullTitle), "%s%s%s",
+               t.dueTime[0] ? t.dueTime : "",
+               t.dueTime[0] ? "  " : "",
+               t.title);
+    }
 
     auto lines = renderer.wrappedText(UI_10_FONT_ID, fullTitle, textWidth, kMaxLines);
     const int taskHeight = static_cast<int>(lines.size()) * lineHeight;
     if (y + taskHeight > contentTop + contentHeight) break;  // would clip
 
-    // Marker aligned with the first line baseline. Overdue tasks swap the
-    // bullet for an exclamation mark so the row visually stands out without
-    // wasting horizontal space on a "[!]" prefix.
-    const char* marker = t.overdue ? kBulletOverdue : kBulletNormal;
+    // Marker aligned with the first line baseline. Overdue takes precedence
+    // over future (an overdue task can't be future, but the order makes the
+    // intent explicit). The future glyph "›" hints at "upcoming" without
+    // demanding attention the way "!" does for overdue.
+    const char* marker = t.overdue   ? kBulletOverdue
+                         : isFuture  ? kBulletFuture
+                                     : kBulletNormal;
     renderer.drawText(UI_10_FONT_ID, kSidePadding, y + lineHeight - 4, marker, true);
 
     for (size_t li = 0; li < lines.size(); ++li) {
