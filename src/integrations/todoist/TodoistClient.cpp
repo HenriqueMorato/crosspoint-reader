@@ -12,7 +12,12 @@ namespace todoist {
 
 namespace {
 
-constexpr const char* kEndpoint = "https://api.todoist.com/api/v1/tasks/filter?query=today";
+// Filter: today's tasks plus overdue tasks whose due date is within the last
+// 7 days. Older overdue tasks are excluded so the list stays actionable.
+// URL-encoded form of: (today | overdue) & due after: -7 days
+constexpr const char* kEndpoint =
+    "https://api.todoist.com/api/v1/tasks/filter?"
+    "query=(today%20%7C%20overdue)%20%26%20due%20after%3A%20-7%20days";
 constexpr int kHttpTimeoutMs = 15000;
 // Keep HTTP rx/tx buffers small. mbedTLS handshake on ESP32-C3 needs ~32 KB
 // of heap on top of these — every KB we free here is one mbedTLS can take.
@@ -182,6 +187,13 @@ FetchResult TodoistClient::fetchToday(const std::string& apiToken,
       datetime = due["datetime"] | static_cast<const char*>(nullptr);
     }
     extractDueTime(datetime, t.dueTime, TodoistTask::kDueTimeCapacity);
+    // Copy YYYY-MM-DD prefix from `date` (always present when `due` exists);
+    // sort comparator below relies on lexicographic order = chronological order.
+    t.dueDate[0] = '\0';
+    if (date && strlen(date) >= 10) {
+      memcpy(t.dueDate, date, 10);
+      t.dueDate[10] = '\0';
+    }
     t.overdue = isOverdue(date);
 
     outTasks.push_back(t);

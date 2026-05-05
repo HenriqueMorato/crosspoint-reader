@@ -10,9 +10,11 @@ namespace todoist {
 // view ellipsises further when rendering.
 struct TodoistTask {
   static constexpr size_t kTitleCapacity = 96;
-  static constexpr size_t kDueTimeCapacity = 6;  // "HH:MM\0"
+  static constexpr size_t kDueTimeCapacity = 6;   // "HH:MM\0"
+  static constexpr size_t kDueDateCapacity = 11;  // "YYYY-MM-DD\0"
 
   char title[kTitleCapacity];
+  char dueDate[kDueDateCapacity];  // empty string if no due date
   char dueTime[kDueTimeCapacity];  // empty string if no time
   uint8_t priority;                // 1 (lowest) to 4 (highest), 0 = unknown
   bool overdue;

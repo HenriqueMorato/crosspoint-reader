@@ -3,6 +3,7 @@
 #include "Logging.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
 #include "integrations/todoist/TodoistConfig.h"
 #include "util/ScreenshotUtil.h"
 
@@ -12,6 +13,7 @@
 
 #include <sys/time.h>
 
+#include <algorithm>
 #include <ctime>
 #include <cstdio>
 #include <cstring>
@@ -171,6 +173,23 @@ void TodoistActivity::proceedWithFetch() {
     localtime_r(&now, &tm_now);
     _capturedHour = static_cast<uint8_t>(tm_now.tm_hour);
     _capturedMin = static_cast<uint8_t>(tm_now.tm_min);
+
+    // Chronological sort: oldest overdue first, then today's timed tasks in
+    // ascending time, then today's untimed tasks last. dueDate is "YYYY-MM-DD"
+    // so plain strcmp gives chronological order; empty dueTime sorts after
+    // any "HH:MM" because '\0' < any printable char — flip the empty-time
+    // case explicitly so untimed entries land at the end of their date group.
+    std::sort(_tasks.begin(), _tasks.end(),
+              [](const todoist::TodoistTask& a, const todoist::TodoistTask& b) {
+                int dateCmp = strcmp(a.dueDate, b.dueDate);
+                if (dateCmp != 0) return dateCmp < 0;
+                bool aTimed = a.dueTime[0] != '\0';
+                bool bTimed = b.dueTime[0] != '\0';
+                if (aTimed != bTimed) return aTimed;  // timed first
+                if (aTimed) return strcmp(a.dueTime, b.dueTime) < 0;
+                return false;  // both untimed: stable order
+              });
+
     _state = State::ShowingTasks;
     _scrollOffset = 0;
     captureSnapshotIfNeeded();
@@ -236,10 +255,11 @@ void TodoistActivity::captureSnapshotIfNeeded() {
   const auto snapshotOrient = TODOIST_CONFIG.getSnapshotOrientation();
 
   if (activityOrient == snapshotOrient) {
-    renderTaskList();
-    if (!ScreenshotUtil::saveFramebufferAsBmp(
+    renderTaskList(/*drawHints=*/false);
+    if (!ScreenshotUtil::saveFramebufferAsBmpOriented(
             kSnapshotBmpPath, renderer.getFrameBuffer(),
-            renderer.getDisplayWidth(), renderer.getDisplayHeight())) {
+            renderer.getDisplayWidth(), renderer.getDisplayHeight(),
+            snapshotOrient)) {
       LOG_ERR("TDST", "Snapshot save failed");
     } else {
       LOG_DBG("TDST", "Snapshot saved to %s", kSnapshotBmpPath);
@@ -250,10 +270,11 @@ void TodoistActivity::captureSnapshotIfNeeded() {
 
   // Different orientations: render in snapshot orientation, save, then revert.
   renderer.setOrientation(snapshotOrient);
-  renderTaskList();
-  if (!ScreenshotUtil::saveFramebufferAsBmp(
+  renderTaskList(/*drawHints=*/false);
+  if (!ScreenshotUtil::saveFramebufferAsBmpOriented(
           kSnapshotBmpPath, renderer.getFrameBuffer(),
-          renderer.getDisplayWidth(), renderer.getDisplayHeight())) {
+          renderer.getDisplayWidth(), renderer.getDisplayHeight(),
+          snapshotOrient)) {
     LOG_ERR("TDST", "Snapshot save failed");
   } else {
     LOG_DBG("TDST", "Snapshot saved to %s (rotated)", kSnapshotBmpPath);
@@ -285,7 +306,7 @@ void TodoistActivity::renderError() {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-void TodoistActivity::renderTaskList() {
+void TodoistActivity::renderTaskList(bool drawHints) {
   renderer.clearScreen();
 
   const int pageWidth = renderer.getScreenWidth();
@@ -298,8 +319,20 @@ void TodoistActivity::renderTaskList() {
 
   GUI.drawHeader(renderer, Rect(0, 0, pageWidth, metrics.headerHeight), header);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (!drawHints) {
+    // Snapshot mode — paint over the battery icon + percentage text drawn by
+    // drawHeader. Battery on a sleep screen is misleading: the value was true
+    // when the snapshot was taken, not when the screen is being viewed.
+    // 80px matches BaseTheme's reserved battery region.
+    constexpr int kBatteryRegionWidth = 80;
+    renderer.fillRect(pageWidth - kBatteryRegionWidth, 5, kBatteryRegionWidth,
+                      metrics.batteryHeight + 10, false);
+  }
+
+  if (drawHints) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
 
   if (_tasks.empty()) {
     GUI.drawPopup(renderer, tr(STR_TODOIST_NO_TASKS));
@@ -307,29 +340,61 @@ void TodoistActivity::renderTaskList() {
   }
 
   const int contentTop = metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight;
+  const int contentHeight =
+      pageHeight - contentTop - (drawHints ? metrics.buttonHintsHeight : 0);
 
-  GUI.drawList(
-      renderer, Rect(0, contentTop, pageWidth, contentHeight),
-      static_cast<int>(_tasks.size()),
-      _scrollOffset,
-      [this](int index) -> std::string {
-        const auto& t = _tasks[index];
-        char buf[128];
-        snprintf(buf, sizeof(buf), "%s%s%s%s",
-                 t.overdue ? "[!] " : "",
-                 t.dueTime[0] ? t.dueTime : "",
-                 t.dueTime[0] ? "  " : "",
-                 t.title);
-        return std::string(buf);
-      },
-      nullptr,
-      nullptr,
-      [this](int index) -> std::string {
-        char buf[8];
-        snprintf(buf, sizeof(buf), "p%u",
-                 static_cast<unsigned>(_tasks[index].priority));
-        return std::string(buf);
-      },
-      false);
+  // Compact bullet list. Each task gets only the height it needs (1 or 2
+  // wrapped lines), with a small gap between tasks. No separator lines —
+  // the bullet glyph is the row delimiter.
+  constexpr int kSidePadding = 20;
+  constexpr const char* kBullet = "\xE2\x80\xA2";  // U+2022 BULLET
+  constexpr int kBulletGap = 8;     // px between bullet and title
+  constexpr int kRowGap = 6;        // px between consecutive tasks
+  constexpr int kMaxLines = 2;
+
+  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  const int bulletWidth = renderer.getTextWidth(UI_10_FONT_ID, kBullet);
+  const int textX = kSidePadding + bulletWidth + kBulletGap;
+  const int textWidth = pageWidth - kSidePadding - textX;
+
+  const int totalTasks = static_cast<int>(_tasks.size());
+  if (_scrollOffset > totalTasks - 1) _scrollOffset = std::max(0, totalTasks - 1);
+
+  int y = contentTop;
+  int rendered = 0;
+  for (int taskIdx = _scrollOffset; taskIdx < totalTasks; ++taskIdx) {
+    const auto& t = _tasks[taskIdx];
+
+    char fullTitle[128];
+    snprintf(fullTitle, sizeof(fullTitle), "%s%s%s%s",
+             t.overdue ? "[!] " : "",
+             t.dueTime[0] ? t.dueTime : "",
+             t.dueTime[0] ? "  " : "",
+             t.title);
+
+    auto lines = renderer.wrappedText(UI_10_FONT_ID, fullTitle, textWidth, kMaxLines);
+    const int taskHeight = static_cast<int>(lines.size()) * lineHeight;
+    if (y + taskHeight > contentTop + contentHeight) break;  // would clip
+
+    // Bullet aligned with the first line baseline.
+    renderer.drawText(UI_10_FONT_ID, kSidePadding, y + lineHeight - 4, kBullet, true);
+
+    for (size_t li = 0; li < lines.size(); ++li) {
+      renderer.drawText(UI_10_FONT_ID, textX, y + (static_cast<int>(li) + 1) * lineHeight - 4,
+                        lines[li].c_str(), true);
+    }
+
+    y += taskHeight + kRowGap;
+    rendered++;
+  }
+
+  // Scroll bar when there are tasks below the visible window.
+  if (rendered < totalTasks - _scrollOffset || _scrollOffset > 0) {
+    const int barX = pageWidth - 6;
+    const int barTrackHeight = contentHeight;
+    const int barHeight = std::max(8, (barTrackHeight * rendered) / totalTasks);
+    const int maxOffset = std::max(1, totalTasks - rendered);
+    const int barY = contentTop + ((barTrackHeight - barHeight) * _scrollOffset) / maxOffset;
+    renderer.fillRect(barX, barY, 2, barHeight, true);
+  }
 }

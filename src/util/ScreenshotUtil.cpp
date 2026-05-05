@@ -96,6 +96,98 @@ void ScreenshotUtil::takeScreenshot(GfxRenderer& renderer) {
   }
 }
 
+bool ScreenshotUtil::saveFramebufferAsBmpOriented(const char* filename, const uint8_t* framebuffer, int panelWidth,
+                                                  int panelHeight,
+                                                  GfxRenderer::Orientation orientation) {
+  if (!framebuffer) return false;
+
+  const bool isPortrait = (orientation == GfxRenderer::Portrait || orientation == GfxRenderer::PortraitInverted);
+  const int logicalW = isPortrait ? panelHeight : panelWidth;
+  const int logicalH = isPortrait ? panelWidth : panelHeight;
+
+  std::string path(filename);
+  size_t last_slash = path.find_last_of('/');
+  if (last_slash != std::string::npos) {
+    std::string dir = path.substr(0, last_slash);
+    if (!Storage.exists(dir.c_str())) {
+      if (!Storage.mkdir(dir.c_str())) return false;
+    }
+  }
+
+  FsFile file;
+  if (!Storage.openFileForWrite("SCR", filename, file)) {
+    LOG_ERR("SCR", "Failed to save oriented BMP");
+    return false;
+  }
+
+  BmpHeader header;
+  createBmpHeader(&header, logicalW, logicalH, BmpRowOrder::BottomUp);
+
+  bool write_error = false;
+  if (file.write(reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header)) {
+    file.close();
+    Storage.remove(filename);
+    return false;
+  }
+
+  const uint32_t rowSizePadded = (logicalW + 31) / 32 * 4;
+  // 800px landscape needs 100 bytes/row; portrait 480px needs 60. Sized for
+  // the worst case so this works for any X4-class panel.
+  constexpr size_t kMaxRowSize = 100;
+  if (rowSizePadded > kMaxRowSize) {
+    LOG_ERR("SCR", "Row size %u exceeds buffer capacity", rowSizePadded);
+    file.close();
+    Storage.remove(filename);
+    return false;
+  }
+
+  uint8_t rowBuffer[kMaxRowSize];
+  const int fbStrideBytes = panelWidth / 8;
+
+  // BMP rows are bottom-up: outY=0 is the bottom row of the displayed image.
+  // For each (imgX, imgY), invert rotateCoordinates() to find the framebuffer pixel.
+  for (int outY = 0; outY < logicalH; outY++) {
+    const int imgY = logicalH - 1 - outY;
+    memset(rowBuffer, 0, rowSizePadded);
+    for (int imgX = 0; imgX < logicalW; imgX++) {
+      int phyX, phyY;
+      switch (orientation) {
+        case GfxRenderer::Portrait:
+          phyX = imgY;
+          phyY = panelHeight - 1 - imgX;
+          break;
+        case GfxRenderer::PortraitInverted:
+          phyX = panelWidth - 1 - imgY;
+          phyY = imgX;
+          break;
+        case GfxRenderer::LandscapeClockwise:
+          phyX = panelWidth - 1 - imgX;
+          phyY = panelHeight - 1 - imgY;
+          break;
+        case GfxRenderer::LandscapeCounterClockwise:
+        default:
+          phyX = imgX;
+          phyY = imgY;
+          break;
+      }
+      const int fbIndex = phyY * fbStrideBytes + (phyX / 8);
+      const uint8_t pixel = (framebuffer[fbIndex] >> (7 - (phyX % 8))) & 0x01;
+      rowBuffer[imgX / 8] |= pixel << (7 - (imgX % 8));
+    }
+    if (file.write(rowBuffer, rowSizePadded) != rowSizePadded) {
+      write_error = true;
+      break;
+    }
+  }
+
+  file.close();
+  if (write_error) {
+    Storage.remove(filename);
+    return false;
+  }
+  return true;
+}
+
 bool ScreenshotUtil::saveFramebufferAsBmp(const char* filename, const uint8_t* framebuffer, int width, int height) {
   if (!framebuffer) {
     return false;

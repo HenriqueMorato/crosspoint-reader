@@ -42,7 +42,10 @@ class TodoistActivity : public Activity {
 
   void renderLoading();
   void renderError();
-  void renderTaskList();
+  // When drawHints is false, the bottom hint bar is omitted and the list
+  // expands into that space. Used by the sleep-screen snapshot, which has
+  // no buttons and shouldn't waste pixels on hints.
+  void renderTaskList(bool drawHints = true);
 
   void captureSnapshotIfNeeded();
   bool writeSnapshotMeta(GfxRenderer::Orientation o);
