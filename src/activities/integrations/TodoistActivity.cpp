@@ -177,7 +177,10 @@ void TodoistActivity::proceedWithFetch() {
   syncTimeWithNTP();
 
   using todoist::FetchResult;
-  FetchResult r = todoist::TodoistClient::fetchToday(TODOIST_CONFIG.getApiToken(), _tasks);
+  FetchResult r = todoist::TodoistClient::fetch(TODOIST_CONFIG.getApiToken(),
+                                                TODOIST_CONFIG.getDateFilter(),
+                                                TODOIST_CONFIG.getOverdueFilter(),
+                                                _tasks);
 
   if (r == FetchResult::Ok) {
     time_t now = time(nullptr);
@@ -380,6 +383,7 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   constexpr int kBulletGap = 8;      // px between bullet and title
   constexpr int kRowGap = 2;         // px between consecutive task rows
   constexpr int kCursorRadius = 6;   // matches Lyra menu cornerRadius
+  constexpr int kDateGap = 8;        // px between title and date suffix
   constexpr int kMaxLines = 2;
 
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
@@ -389,6 +393,10 @@ void TodoistActivity::renderTaskList(bool drawHints) {
       renderer.getTextWidth(UI_10_FONT_ID, kBulletNormal),
       renderer.getTextWidth(UI_10_FONT_ID, kBulletOverdue),
       renderer.getTextWidth(UI_10_FONT_ID, kBulletFuture)});
+  // Width reserved on the right edge of the row for the dd/mm date suffix.
+  // Computed from a representative pair so every dated row renders at the
+  // same x — avoids one row's "31/12" pushing wider than the previous "5/3".
+  const int dateColWidth = renderer.getTextWidth(UI_10_FONT_ID, "00/00");
 
   const int tileX = sidePadding;
   const int tileWidth = pageWidth - sidePadding * 2;
@@ -410,25 +418,20 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     const bool isFuture =
         _today[0] != '\0' && t.dueDate[0] != '\0' && strcmp(t.dueDate, _today) > 0;
 
-    char fullTitle[128];
-    if (isFuture) {
-      // Show MM-DD prefix so the user can see when each future item is due.
-      // Skip the "YYYY-" prefix to save horizontal space; year is implied by
-      // context (filter range never spans more than a few weeks).
-      const char* monthDay = t.dueDate + 5;  // "YYYY-MM-DD" -> "MM-DD"
-      snprintf(fullTitle, sizeof(fullTitle), "%s%s%s  %s",
-               monthDay,
-               t.dueTime[0] ? " " : "",
-               t.dueTime[0] ? t.dueTime : "",
-               t.title);
-    } else {
-      snprintf(fullTitle, sizeof(fullTitle), "%s%s%s",
-               t.dueTime[0] ? t.dueTime : "",
-               t.dueTime[0] ? "  " : "",
-               t.title);
-    }
+    // Show a dd/mm date suffix on every row that has a dueDate — including
+    // today's. The marker glyph already encodes overdue/future/today, but the
+    // explicit date is what lets the user tell "due Friday" apart from "due
+    // next Friday" at a glance.
+    const bool showDate = t.dueDate[0] != '\0';
 
-    auto lines = renderer.wrappedText(UI_10_FONT_ID, fullTitle, textWidth, kMaxLines);
+    char fullTitle[128];
+    snprintf(fullTitle, sizeof(fullTitle), "%s%s%s",
+             t.dueTime[0] ? t.dueTime : "",
+             t.dueTime[0] ? "  " : "",
+             t.title);
+
+    const int rowTextWidth = showDate ? textWidth - dateColWidth - kDateGap : textWidth;
+    auto lines = renderer.wrappedText(UI_10_FONT_ID, fullTitle, rowTextWidth, kMaxLines);
     const int textBlockHeight = static_cast<int>(lines.size()) * lineHeight;
     const int tileHeight = textBlockHeight + kTilePaddingY * 2;
     if (y + tileHeight > contentTop + contentHeight) break;  // would clip
@@ -458,6 +461,19 @@ void TodoistActivity::renderTaskList(bool drawHints) {
       renderer.drawText(UI_10_FONT_ID, textX,
                         firstLineY + static_cast<int>(li) * lineHeight,
                         lines[li].c_str(), true);
+    }
+
+    // dd/mm date suffix at the right edge of the row, baseline-aligned with
+    // the first title line. dueDate is "YYYY-MM-DD"; index 5..6 = month,
+    // 8..9 = day. Dropping the year keeps the column narrow — filter ranges
+    // never span more than a couple of months, so the year is implicit.
+    if (showDate) {
+      char dateBuf[6];
+      snprintf(dateBuf, sizeof(dateBuf), "%c%c/%c%c",
+               t.dueDate[8], t.dueDate[9], t.dueDate[5], t.dueDate[6]);
+      const int dateWidth = renderer.getTextWidth(UI_10_FONT_ID, dateBuf);
+      const int dateX = tileX + tileWidth - kTilePaddingX - dateWidth;
+      renderer.drawText(UI_10_FONT_ID, dateX, firstLineY, dateBuf, true);
     }
 
     y += tileHeight + kRowGap;

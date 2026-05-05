@@ -35,6 +35,42 @@ GfxRenderer::Orientation orientationFromString(const char* s, GfxRenderer::Orien
   return fallback;
 }
 
+const char* dateFilterToString(DateFilter f) {
+  switch (f) {
+    case DateFilter::None:      return "none";
+    case DateFilter::Today:     return "today";
+    case DateFilter::ThisWeek:  return "this_week";
+    case DateFilter::ThisMonth: return "this_month";
+  }
+  return "today";
+}
+
+DateFilter dateFilterFromString(const char* s, DateFilter fallback) {
+  if (!s) return fallback;
+  if (strcmp(s, "none") == 0)       return DateFilter::None;
+  if (strcmp(s, "today") == 0)      return DateFilter::Today;
+  if (strcmp(s, "this_week") == 0)  return DateFilter::ThisWeek;
+  if (strcmp(s, "this_month") == 0) return DateFilter::ThisMonth;
+  return fallback;
+}
+
+const char* overdueFilterToString(OverdueFilter f) {
+  switch (f) {
+    case OverdueFilter::None:      return "none";
+    case OverdueFilter::Last7Days: return "last_7_days";
+    case OverdueFilter::All:       return "all";
+  }
+  return "last_7_days";
+}
+
+OverdueFilter overdueFilterFromString(const char* s, OverdueFilter fallback) {
+  if (!s) return fallback;
+  if (strcmp(s, "none") == 0)        return OverdueFilter::None;
+  if (strcmp(s, "last_7_days") == 0) return OverdueFilter::Last7Days;
+  if (strcmp(s, "all") == 0)         return OverdueFilter::All;
+  return fallback;
+}
+
 }  // namespace
 
 TodoistConfig& TodoistConfig::getInstance() {
@@ -48,6 +84,8 @@ bool TodoistConfig::load() {
   sleepScreenEnabled = false;
   activityOrientation = GfxRenderer::Orientation::Portrait;
   snapshotOrientation = GfxRenderer::Orientation::Portrait;
+  dateFilter = DateFilter::Today;
+  overdueFilter = OverdueFilter::Last7Days;
 
   if (!Storage.exists(kConfigPath)) {
     LOG_DBG("TDST", "No config at %s", kConfigPath);
@@ -92,6 +130,12 @@ bool TodoistConfig::load() {
   snapshotOrientation = orientationFromString(
       doc["snapshot_orientation"] | static_cast<const char*>(nullptr),
       GfxRenderer::Orientation::Portrait);
+  dateFilter = dateFilterFromString(
+      doc["date_filter"] | static_cast<const char*>(nullptr),
+      DateFilter::Today);
+  overdueFilter = overdueFilterFromString(
+      doc["overdue_filter"] | static_cast<const char*>(nullptr),
+      OverdueFilter::Last7Days);
 
   loaded = true;
   LOG_DBG("TDST", "Config loaded (token=%s, sleep=%d)",
@@ -121,12 +165,26 @@ bool TodoistConfig::setSnapshotOrientation(GfxRenderer::Orientation o) {
   return persist();
 }
 
+bool TodoistConfig::setDateFilter(DateFilter f) {
+  if (f == dateFilter) return true;
+  dateFilter = f;
+  return persist();
+}
+
+bool TodoistConfig::setOverdueFilter(OverdueFilter f) {
+  if (f == overdueFilter) return true;
+  overdueFilter = f;
+  return persist();
+}
+
 bool TodoistConfig::persist() {
   JsonDocument doc;
   doc["api_token"] = apiToken;
   doc["sleep_screen_enabled"] = sleepScreenEnabled;
   doc["activity_orientation"] = orientationToString(activityOrientation);
   doc["snapshot_orientation"] = orientationToString(snapshotOrientation);
+  doc["date_filter"] = dateFilterToString(dateFilter);
+  doc["overdue_filter"] = overdueFilterToString(overdueFilter);
 
   // Atomic write: serialize to .tmp, close, rename to final path.
   if (Storage.exists(kConfigTmpPath)) {
@@ -187,6 +245,8 @@ bool TodoistConfig::forget() {
     sleepScreenEnabled = false;
     activityOrientation = GfxRenderer::Orientation::Portrait;
     snapshotOrientation = GfxRenderer::Orientation::Portrait;
+    dateFilter = DateFilter::Today;
+    overdueFilter = OverdueFilter::Last7Days;
     loaded = false;
   }
   return ok;

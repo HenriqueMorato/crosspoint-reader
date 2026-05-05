@@ -33,7 +33,7 @@ class TodoistActivity : public Activity {
   // and re-enters proceedWithFetch() on its result.
   void startFetch();
 
-  // Step 2 of fetch: NTP + TodoistClient::fetchToday + populate state.
+  // Step 2 of fetch: NTP + TodoistClient::fetch + populate state.
   // Called once WiFi is up.
   void proceedWithFetch();
 
