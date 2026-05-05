@@ -344,8 +344,12 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   }
 
   const int contentTop = metrics.headerHeight + metrics.verticalSpacing;
+  // Match TodoistSettingsActivity: reserve verticalSpacing*2 above the hint
+  // bar so tasks don't overlap the hint row in landscape, where the hint
+  // strip is closer to the content edge than in portrait.
   const int contentHeight =
-      pageHeight - contentTop - (drawHints ? metrics.buttonHintsHeight : 0);
+      pageHeight - contentTop -
+      (drawHints ? metrics.buttonHintsHeight + metrics.verticalSpacing * 2 : 0);
 
   // Compact bullet list. Each task gets only the height it needs (1 or 2
   // wrapped lines), with a small gap between tasks. No separator lines —
