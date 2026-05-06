@@ -32,12 +32,27 @@ struct ResponseBuffer {
   size_t capacity = 0;
   size_t size = 0;
   bool truncated = false;
+  bool allocFailed = false;
 };
 
 esp_err_t httpEventHandler(esp_http_client_event_t* evt) {
   if (evt->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
   auto* buf = static_cast<ResponseBuffer*>(evt->user_data);
-  if (!buf || !buf->data || !evt->data || evt->data_len <= 0) return ESP_OK;
+  if (!buf || !evt->data || evt->data_len <= 0) return ESP_OK;
+  // Lazy allocation: claim the response buffer only after the TLS handshake
+  // has run and freed its scratch. Allocating up-front leaves mbedtls without
+  // a contiguous block big enough for SSL setup on the C3 (~40KB), even
+  // when total free heap looks healthy.
+  if (!buf->data) {
+    if (buf->allocFailed) return ESP_OK;
+    buf->data = static_cast<char*>(malloc(buf->capacity));
+    if (!buf->data) {
+      buf->allocFailed = true;
+      LOG_ERR("TDST", "OOM allocating %u-byte response buffer",
+              static_cast<unsigned>(buf->capacity));
+      return ESP_OK;
+    }
+  }
   size_t len = static_cast<size_t>(evt->data_len);
   size_t avail = buf->capacity - buf->size;
   if (len > avail) {
@@ -215,16 +230,12 @@ FetchResult TodoistClient::fetch(const std::string& apiToken,
   const std::string url = std::string(kEndpointBase) + urlEncode(query);
   LOG_DBG("TDST", "Query: %s", query.c_str());
 
-  // Single fixed allocation for the response. Freed before return on every
-  // path. See kMaxResponseBytes comment for why we don't use std::string.
+  // Response buffer descriptor. The actual char[] is allocated lazily inside
+  // the event handler on first ON_DATA — after the TLS handshake has run and
+  // mbedtls has released its handshake scratch. Pre-allocating here
+  // fragments the heap and breaks SSL setup on the C3 (-0x7F00 alloc fail).
   ResponseBuffer buf;
   buf.capacity = kMaxResponseBytes;
-  buf.data = static_cast<char*>(malloc(buf.capacity));
-  if (!buf.data) {
-    LOG_ERR("TDST", "OOM allocating %u-byte response buffer",
-            static_cast<unsigned>(buf.capacity));
-    return FetchResult::NetworkError;
-  }
 
   esp_http_client_config_t config = {};
   config.url = url.c_str();
@@ -261,6 +272,13 @@ FetchResult TodoistClient::fetch(const std::string& apiToken,
           buf.truncated ? " [truncated]" : "");
 
   if (err != ESP_OK) {
+    free(buf.data);
+    return FetchResult::NetworkError;
+  }
+  if (buf.allocFailed) {
+    // Lazy malloc inside the event handler couldn't claim the response
+    // buffer even after TLS — probably a heap-pressure condition. Surface
+    // as NetworkError; the body is unrecoverable at this point.
     free(buf.data);
     return FetchResult::NetworkError;
   }
