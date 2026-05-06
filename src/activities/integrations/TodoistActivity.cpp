@@ -352,14 +352,34 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   const int pageHeight = renderer.getScreenHeight();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  char header[64];
-  snprintf(header, sizeof(header), I18N.get(StrId::STR_TODOIST_TODAY_HEADER),
+  // drawButtonHints internally forces Portrait and paints at the bottom of
+  // the physical screen, then restores orientation. In Portrait the strip
+  // lands at the logical bottom (we trim contentHeight). In landscape the
+  // same physical pixels end up on a *side* of the logical view — right in
+  // LandscapeCounterClockwise, left in LandscapeClockwise — so we reserve
+  // width on that side instead of trimming height. The header rect uses the
+  // same reserve so its battery icon and underline don't run under the
+  // hint button rectangles in landscape.
+  const auto orientation = renderer.getOrientation();
+  const bool isLandscape = (orientation == GfxRenderer::LandscapeClockwise ||
+                            orientation == GfxRenderer::LandscapeCounterClockwise);
+  const bool hintOnLeft = (orientation == GfxRenderer::LandscapeClockwise);
+  const int hintReserve = drawHints ? metrics.buttonHintsHeight + metrics.verticalSpacing * 2 : 0;
+  const int hintLeftReserve = (isLandscape && hintOnLeft) ? hintReserve : 0;
+  const int hintRightReserve = (isLandscape && !hintOnLeft) ? hintReserve : 0;
+
+  char timestamp[32];
+  snprintf(timestamp, sizeof(timestamp), I18N.get(StrId::STR_TODOIST_TODAY_HEADER),
            _capturedDay, _capturedMonth, _capturedHour, _capturedMin);
 
-  // Match the offset every other activity uses: header sits below topPadding,
-  // not flush against the screen edge. Without this, the Lyra theme's 3px
-  // header underline lands a few pixels too high and looks like a stray rule.
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, header);
+  // "Todoist" as bold title on the left, timestamp as small right-aligned
+  // subtitle. Subtitle uses the smaller SMALL_FONT_ID inside drawHeader, so
+  // the update time reads as status info rather than a heavy header line.
+  GUI.drawHeader(
+      renderer,
+      Rect{hintLeftReserve, metrics.topPadding,
+           pageWidth - hintLeftReserve - hintRightReserve, metrics.headerHeight},
+      tr(STR_TODOIST), timestamp);
 
   if (!drawHints) {
     // Snapshot mode — paint over the battery icon + percentage text drawn by
@@ -367,7 +387,7 @@ void TodoistActivity::renderTaskList(bool drawHints) {
     // when the snapshot was taken, not when the screen is being viewed.
     // 80px matches BaseTheme's reserved battery region.
     constexpr int kBatteryRegionWidth = 80;
-    renderer.fillRect(pageWidth - kBatteryRegionWidth, metrics.topPadding + 5,
+    renderer.fillRect(pageWidth - hintRightReserve - kBatteryRegionWidth, metrics.topPadding + 5,
                       kBatteryRegionWidth, metrics.batteryHeight + 10, false);
   }
 
@@ -382,12 +402,7 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   }
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  // Match TodoistSettingsActivity: reserve verticalSpacing*2 above the hint
-  // bar so tasks don't overlap the hint row in landscape, where the hint
-  // strip is closer to the content edge than in portrait.
-  const int contentHeight =
-      pageHeight - contentTop -
-      (drawHints ? metrics.buttonHintsHeight + metrics.verticalSpacing * 2 : 0);
+  const int contentHeight = pageHeight - contentTop - (isLandscape ? 0 : hintReserve);
 
   // Compact bullet list. Each task gets only the height it needs (1 or 2
   // wrapped lines), with a small gap between tasks. No separator lines —
@@ -419,8 +434,8 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   // same x — avoids one row's "31/12" pushing wider than the previous "5/3".
   const int dateColWidth = renderer.getTextWidth(UI_10_FONT_ID, "00/00");
 
-  const int tileX = sidePadding;
-  const int tileWidth = pageWidth - sidePadding * 2;
+  const int tileX = sidePadding + hintLeftReserve;
+  const int tileWidth = pageWidth - sidePadding * 2 - hintLeftReserve - hintRightReserve;
   const int textX = tileX + kTilePaddingX + bulletColWidth + kBulletGap;
   const int textWidth = tileX + tileWidth - kTilePaddingX - textX;
 
