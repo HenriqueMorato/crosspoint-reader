@@ -109,12 +109,10 @@ bool TodoistConfig::load() {
     if (n <= 0) break;
     if (buffer.size() + static_cast<size_t>(n) > kMaxConfigBytes) {
       LOG_ERR("TDST", "Config exceeds %u bytes", static_cast<unsigned>(kMaxConfigBytes));
-      file.close();
       return false;
     }
     buffer.append(reinterpret_cast<const char*>(chunk), static_cast<size_t>(n));
   }
-  file.close();
 
   JsonDocument doc;
   auto err = deserializeJson(doc, buffer);
@@ -208,16 +206,21 @@ bool TodoistConfig::persist() {
     Storage.remove(kConfigTmpPath);
   }
 
-  HalFile file;
-  if (!Storage.openFileForWrite("TDST", kConfigTmpPath, file)) {
-    LOG_ERR("TDST", "Cannot open tmp for write");
-    return false;
-  }
-
   std::string out;
   serializeJson(doc, out);
-  size_t written = file.write(reinterpret_cast<const uint8_t*>(out.data()), out.size());
-  file.close();
+
+  // Scoped: HalFile destructor closes the underlying SdFat file before the
+  // rename below — SdFat behaviour against an open handle is implementation-
+  // defined, so we don't rely on it.
+  size_t written = 0;
+  {
+    HalFile file;
+    if (!Storage.openFileForWrite("TDST", kConfigTmpPath, file)) {
+      LOG_ERR("TDST", "Cannot open tmp for write");
+      return false;
+    }
+    written = file.write(reinterpret_cast<const uint8_t*>(out.data()), out.size());
+  }
 
   if (written != out.size()) {
     LOG_ERR("TDST", "Short write: %u/%u", static_cast<unsigned>(written),
