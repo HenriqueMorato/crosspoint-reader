@@ -368,9 +368,12 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   const int hintLeftReserve = (isLandscape && hintOnLeft) ? hintReserve : 0;
   const int hintRightReserve = (isLandscape && !hintOnLeft) ? hintReserve : 0;
 
+  char dateStr[8];
+  todoist::formatDate(_capturedDay, _capturedMonth, TODOIST_CONFIG.getDateFormat(),
+                      dateStr, sizeof(dateStr));
   char timestamp[32];
   snprintf(timestamp, sizeof(timestamp), I18N.get(StrId::STR_TODOIST_TODAY_HEADER),
-           _capturedDay, _capturedMonth, _capturedHour, _capturedMin);
+           dateStr, _capturedHour, _capturedMin);
 
   // "Todoist" as bold title on the left, timestamp as small right-aligned
   // subtitle. Subtitle uses the smaller SMALL_FONT_ID inside drawHeader, so
@@ -499,14 +502,16 @@ void TodoistActivity::renderTaskList(bool drawHints) {
                         lines[li].c_str(), true);
     }
 
-    // dd/mm date suffix at the right edge of the row, baseline-aligned with
-    // the first title line. dueDate is "YYYY-MM-DD"; index 5..6 = month,
+    // Date suffix at the right edge of the row, baseline-aligned with the
+    // first title line. dueDate is "YYYY-MM-DD"; index 5..6 = month,
     // 8..9 = day. Dropping the year keeps the column narrow — filter ranges
     // never span more than a couple of months, so the year is implicit.
+    // Order/separator come from the user-configured DateFormat.
     if (showDate) {
-      char dateBuf[6];
-      snprintf(dateBuf, sizeof(dateBuf), "%c%c/%c%c",
-               t.dueDate[8], t.dueDate[9], t.dueDate[5], t.dueDate[6]);
+      const int day = (t.dueDate[8] - '0') * 10 + (t.dueDate[9] - '0');
+      const int mon = (t.dueDate[5] - '0') * 10 + (t.dueDate[6] - '0');
+      char dateBuf[8];
+      todoist::formatDate(day, mon, TODOIST_CONFIG.getDateFormat(), dateBuf, sizeof(dateBuf));
       const int dateWidth = renderer.getTextWidth(UI_10_FONT_ID, dateBuf);
       const int dateX = tileX + tileWidth - kTilePaddingX - dateWidth;
       renderer.drawText(UI_10_FONT_ID, dateX, firstLineY, dateBuf, true);

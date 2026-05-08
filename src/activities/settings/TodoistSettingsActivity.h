@@ -25,5 +25,5 @@ class TodoistSettingsActivity final : public Activity {
 
   ButtonNavigator buttonNavigator;
   int selectedIndex = 0;
-  static constexpr int kItemCount = 7;
+  static constexpr int kItemCount = 8;
 };

@@ -75,6 +75,18 @@ const char* gmtOffsetLabel(int8_t offset) {
   return buf;
 }
 
+todoist::DateFormat nextDateFormat(todoist::DateFormat f) {
+  switch (f) {
+    case todoist::DateFormat::DayMonthSlash: return todoist::DateFormat::MonthDaySlash;
+    case todoist::DateFormat::MonthDaySlash: return todoist::DateFormat::DayMonthDash;
+    case todoist::DateFormat::DayMonthDash:  return todoist::DateFormat::MonthDayDash;
+    case todoist::DateFormat::MonthDayDash:  return todoist::DateFormat::DayMonthDot;
+    case todoist::DateFormat::DayMonthDot:   return todoist::DateFormat::MonthDayDot;
+    case todoist::DateFormat::MonthDayDot:   return todoist::DateFormat::DayMonthSlash;
+  }
+  return todoist::DateFormat::DayMonthSlash;
+}
+
 }  // namespace
 
 void TodoistSettingsActivity::onEnter() {
@@ -126,6 +138,9 @@ void TodoistSettingsActivity::handleSelection() {
       TODOIST_CONFIG.setGmtOffset(nextGmtOffset(TODOIST_CONFIG.getGmtOffset()));
       return;
     case 6:
+      TODOIST_CONFIG.setDateFormat(nextDateFormat(TODOIST_CONFIG.getDateFormat()));
+      return;
+    case 7:
       TODOIST_CONFIG.forget();
       return;
   }
@@ -168,7 +183,8 @@ void TodoistSettingsActivity::render(RenderLock&&) {
           case 3: return std::string(tr(STR_TODOIST_DATE_FILTER));
           case 4: return std::string(tr(STR_TODOIST_OVERDUE_FILTER));
           case 5: return std::string(tr(STR_TODOIST_TIMEZONE));
-          case 6: return std::string(tr(STR_TODOIST_FORGET));
+          case 6: return std::string(tr(STR_TODOIST_DATE_FORMAT));
+          case 7: return std::string(tr(STR_TODOIST_FORGET));
         }
         return "";
       },
@@ -181,7 +197,8 @@ void TodoistSettingsActivity::render(RenderLock&&) {
           case 3: return std::string(dateFilterLabel(TODOIST_CONFIG.getDateFilter()));
           case 4: return std::string(overdueFilterLabel(TODOIST_CONFIG.getOverdueFilter()));
           case 5: return std::string(gmtOffsetLabel(TODOIST_CONFIG.getGmtOffset()));
-          case 6: return std::string("");
+          case 6: return std::string(todoist::dateFormatToString(TODOIST_CONFIG.getDateFormat()));
+          case 7: return std::string("");
         }
         return "";
       },

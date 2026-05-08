@@ -33,6 +33,29 @@ enum class OverdueFilter : uint8_t {
   All = 2,        // all overdue, no lower bound
 };
 
+// Display format for any date rendered by the Todoist activity (header
+// "Updated ..." stamp and per-row due-date suffixes). Year is omitted in
+// every variant — task date ranges never span multiple years in normal
+// use, so the year is implicit and the column stays narrow.
+enum class DateFormat : uint8_t {
+  DayMonthSlash = 0,   // 31/12                               ← default
+  MonthDaySlash = 1,   // 12/31
+  DayMonthDash = 2,    // 31-12
+  MonthDayDash = 3,    // 12-31
+  DayMonthDot = 4,     // 31.12
+  MonthDayDot = 5,     // 12.31
+};
+
+// Render a date into `out` according to `fmt`. Always writes a NUL terminator.
+// `outSize` must be >= 6 (5 chars + NUL). Returns chars written (excluding
+// NUL), or 0 on overflow / invalid input.
+size_t formatDate(int day, int month, DateFormat fmt, char* out, size_t outSize);
+
+// Canonical wire/display string for `f`, e.g. "dd/mm". Used both as the
+// JSON persist value and as the settings-row label — the patterns are
+// universal English shorthand, so a single source of truth works for both.
+const char* dateFormatToString(DateFormat f);
+
 class TodoistConfig {
  public:
   static TodoistConfig& getInstance();
@@ -51,6 +74,9 @@ class TodoistConfig {
   // need today's date to compute the "due before:" cutoff.
   DateFilter getDateFilter() const { return dateFilter; }
   OverdueFilter getOverdueFilter() const { return overdueFilter; }
+
+  // Display format for dates rendered by the Todoist activity.
+  DateFormat getDateFormat() const { return dateFormat; }
 
   // Toggle: render Todoist snapshot on sleep when available.
   bool isSleepScreenEnabled() const { return sleepScreenEnabled; }
@@ -76,6 +102,7 @@ class TodoistConfig {
   bool setDateFilter(DateFilter f);
   bool setOverdueFilter(OverdueFilter f);
   bool setGmtOffset(int8_t hours);
+  bool setDateFormat(DateFormat f);
 
   // Token convenience: true when token is non-empty and >= 20 chars.
   bool hasValidToken() const;
@@ -99,6 +126,7 @@ class TodoistConfig {
   DateFilter dateFilter = DateFilter::Today;
   OverdueFilter overdueFilter = OverdueFilter::Last7Days;
   int8_t gmtOffset = 0;
+  DateFormat dateFormat = DateFormat::DayMonthSlash;
   bool loaded = false;
 };
 

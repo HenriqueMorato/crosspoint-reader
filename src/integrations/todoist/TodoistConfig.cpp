@@ -71,7 +71,46 @@ OverdueFilter overdueFilterFromString(const char* s, OverdueFilter fallback) {
   return fallback;
 }
 
+DateFormat dateFormatFromString(const char* s, DateFormat fallback) {
+  if (!s) return fallback;
+  if (strcmp(s, "dd/mm") == 0) return DateFormat::DayMonthSlash;
+  if (strcmp(s, "mm/dd") == 0) return DateFormat::MonthDaySlash;
+  if (strcmp(s, "dd-mm") == 0) return DateFormat::DayMonthDash;
+  if (strcmp(s, "mm-dd") == 0) return DateFormat::MonthDayDash;
+  if (strcmp(s, "dd.mm") == 0) return DateFormat::DayMonthDot;
+  if (strcmp(s, "mm.dd") == 0) return DateFormat::MonthDayDot;
+  return fallback;
+}
+
 }  // namespace
+
+const char* dateFormatToString(DateFormat f) {
+  switch (f) {
+    case DateFormat::DayMonthSlash: return "dd/mm";
+    case DateFormat::MonthDaySlash: return "mm/dd";
+    case DateFormat::DayMonthDash:  return "dd-mm";
+    case DateFormat::MonthDayDash:  return "mm-dd";
+    case DateFormat::DayMonthDot:   return "dd.mm";
+    case DateFormat::MonthDayDot:   return "mm.dd";
+  }
+  return "dd/mm";
+}
+
+size_t formatDate(int day, int month, DateFormat fmt, char* out, size_t outSize) {
+  if (!out || outSize < 6) return 0;
+  // Day-first formats put day before separator; month-first invert.
+  // Separator differs across the three families (slash / dash / dot).
+  const char sep = (fmt == DateFormat::DayMonthSlash || fmt == DateFormat::MonthDaySlash) ? '/'
+                 : (fmt == DateFormat::DayMonthDash  || fmt == DateFormat::MonthDayDash)  ? '-'
+                                                                                          : '.';
+  const bool dayFirst = (fmt == DateFormat::DayMonthSlash ||
+                         fmt == DateFormat::DayMonthDash ||
+                         fmt == DateFormat::DayMonthDot);
+  const int a = dayFirst ? day : month;
+  const int b = dayFirst ? month : day;
+  int n = snprintf(out, outSize, "%02d%c%02d", a, sep, b);
+  return (n > 0 && static_cast<size_t>(n) < outSize) ? static_cast<size_t>(n) : 0;
+}
 
 TodoistConfig& TodoistConfig::getInstance() {
   static TodoistConfig instance;
@@ -87,6 +126,7 @@ bool TodoistConfig::load() {
   dateFilter = DateFilter::Today;
   overdueFilter = OverdueFilter::Last7Days;
   gmtOffset = 0;
+  dateFormat = DateFormat::DayMonthSlash;
 
   if (!Storage.exists(kConfigPath)) {
     LOG_DBG("TDST", "No config at %s", kConfigPath);
@@ -143,6 +183,10 @@ bool TodoistConfig::load() {
   if (rawOffset > 14)  rawOffset = 14;
   gmtOffset = static_cast<int8_t>(rawOffset);
 
+  dateFormat = dateFormatFromString(
+      doc["date_format"] | static_cast<const char*>(nullptr),
+      DateFormat::DayMonthSlash);
+
   loaded = true;
   LOG_DBG("TDST", "Config loaded (token=%s, sleep=%d)",
           apiToken.empty() ? "no" : "yes", sleepScreenEnabled);
@@ -191,6 +235,12 @@ bool TodoistConfig::setGmtOffset(int8_t hours) {
   return persist();
 }
 
+bool TodoistConfig::setDateFormat(DateFormat f) {
+  if (f == dateFormat) return true;
+  dateFormat = f;
+  return persist();
+}
+
 bool TodoistConfig::persist() {
   JsonDocument doc;
   doc["api_token"] = apiToken;
@@ -200,6 +250,7 @@ bool TodoistConfig::persist() {
   doc["date_filter"] = dateFilterToString(dateFilter);
   doc["overdue_filter"] = overdueFilterToString(overdueFilter);
   doc["gmt_offset"] = static_cast<int>(gmtOffset);
+  doc["date_format"] = dateFormatToString(dateFormat);
 
   // Atomic write: serialize to .tmp, close, rename to final path.
   if (Storage.exists(kConfigTmpPath)) {
