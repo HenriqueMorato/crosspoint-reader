@@ -625,15 +625,30 @@ void TodoistActivity::renderDaily(bool drawHints) {
     int leftCursor = leftX;
     if (icon) {
       // Optical alignment: drawText's `y` is the top of the text box and
-      // the baseline sits at y + ascender. UI_12 reserves a chunk of
-      // blank space above the cap line for diacritics, so visible glyphs
-      // span roughly the lower half of the ascender. To put the icon's
-      // optical center on the cap-to-baseline midline of "Clear", drop
-      // the icon's bottom past the baseline by ~6px (well within the
-      // 8px gap to the divider below).
-      const int ascender = renderer.getFontAscenderSize(UI_12_FONT_ID);
-      const int iconY = y + ascender + 6 - kIconSize;
-      renderer.drawIcon(icon, leftCursor, iconY, kIconSize, kIconSize);
+      // the baseline sits at y + ascender. Center the icon on the line
+      // box: line height is advanceY, so iconY = y + (advanceY - kIconSize)/2.
+      // UI_12 advanceY ≈ 29, so the icon top lands ~3px below y.
+      const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
+      const int iconY = y + (lineH - kIconSize) / 2;
+      // Blit the 24x24 1-bit icon via drawPixel rather than drawIcon.
+      // Two reasons: (1) drawIcon uses a Portrait-only hardcoded
+      // transform, so the icon would land off-panel when the sleep
+      // snapshot is captured in a different orientation than the
+      // activity. drawPixel goes through rotateCoordinates so all four
+      // orientations work. (2) drawImageTransparent's blit truncates x
+      // to a byte boundary, which under Portrait's logical→physical
+      // mapping snaps the icon's logical y to multiples of 8 — visible
+      // as a 0-7px upward drift. Per-pixel writes bypass that. Bit 0
+      // = black, 1 = transparent (per weather.h).
+      for (int row = 0; row < kIconSize; ++row) {
+        for (int col = 0; col < kIconSize; ++col) {
+          const int byteIdx = row * (kIconSize / 8) + (col / 8);
+          const uint8_t mask = static_cast<uint8_t>(1 << (7 - (col % 8)));
+          if ((icon[byteIdx] & mask) == 0) {
+            renderer.drawPixel(leftCursor + col, iconY + row, true);
+          }
+        }
+      }
       leftCursor += kIconSize + kIconTextGap;
     }
     renderer.drawText(UI_12_FONT_ID, leftCursor, y, condition, true);
