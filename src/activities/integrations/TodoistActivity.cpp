@@ -5,6 +5,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "integrations/todoist/TodoistConfig.h"
+#include "integrations/weather/WeatherClient.h"
 #include "util/ScreenshotUtil.h"
 
 #include <HalStorage.h>
@@ -233,12 +234,97 @@ void TodoistActivity::proceedWithFetch() {
     _scrollOffset = 0;
     _selectedIndex = 0;
     _lastVisibleIndex = -1;
+    // Best-effort: fetch weather BEFORE the snapshot so the saved sleep
+    // image shows the same forecast the active view does. A failure here
+    // just leaves _forecast.valid=false; the renderer handles that.
+    refreshWeatherIfNeeded();
     captureSnapshotIfNeeded();
   } else {
     _state = State::ShowingError;
     _errorStrId = fetchResultToStrId(r);
   }
   requestUpdate(true);
+}
+
+void TodoistActivity::refreshWeatherIfNeeded() {
+  _forecast = weather::Forecast{};  // reset to invalid
+
+  // Weather is a Daily-only concern. Spending an HTTP round-trip on the
+  // Minimal design — which has no slot to render it — would just slow
+  // down the refresh.
+  if (TODOIST_CONFIG.getDesignMode() != todoist::DesignMode::Daily) return;
+
+  // Helper: copy the configured city name into a Forecast struct. Used by
+  // both the cache-hit and fresh-fetch paths so the renderer never has to
+  // know which path produced the forecast.
+  auto fillLocationName = [this](weather::Forecast& fc) {
+    const std::string& name = TODOIST_CONFIG.getLocationName();
+    size_t n = name.size();
+    if (n >= sizeof(fc.locationName)) n = sizeof(fc.locationName) - 1;
+    memcpy(fc.locationName, name.data(), n);
+    fc.locationName[n] = '\0';
+  };
+
+  // Cache hit: same calendar date in the user's timezone AND we still have
+  // a known location. Weather hi/lo and the WMO code don't move
+  // meaningfully within a day; skipping the two HTTPS round-trips also
+  // dodges the EAI_FAIL pattern we hit when chaining TLS connections.
+  if (_today[0] != '\0' && TODOIST_CONFIG.hasLocation() &&
+      TODOIST_CONFIG.getCachedWeatherDate() == _today) {
+    weather::Forecast fc;
+    fc.valid = true;
+    fc.wmoCode = TODOIST_CONFIG.getCachedWeatherWmo();
+    fc.hi = TODOIST_CONFIG.getCachedWeatherHi();
+    fc.lo = TODOIST_CONFIG.getCachedWeatherLo();
+    fc.unit = TODOIST_CONFIG.getTemperatureUnit();
+    fillLocationName(fc);
+    _forecast = fc;
+    LOG_DBG("TDST", "Weather cache hit for %s (wmo=%u hi=%d lo=%d)",
+            _today, fc.wmoCode, fc.hi, fc.lo);
+    return;
+  }
+
+  // No location configured → nothing to fetch. The user must set a city
+  // via Settings → Todoist → Location. IP geolocation was abandoned: it's
+  // unreliable on Starlink, CGNAT, and VPN (Starlink in particular routes
+  // through a regional ground station, so every IP database pins the user
+  // at the wrong city). Manual entry is the only universally-correct fix.
+  if (!TODOIST_CONFIG.hasLocation()) {
+    LOG_DBG("TDST", "No location set — skipping weather fetch");
+    return;
+  }
+
+  // Cache miss → fall through to fetch path.
+  // Let lwIP settle after Todoist's TLS teardown. Without this, the next
+  // getaddrinfo() returns EAI_FAIL (202) for several seconds — empirically
+  // observed on the C3 when two HTTPS requests are issued back-to-back.
+  // 500 ms wasn't enough in practice (retries still failed); 1.5 s clears
+  // the resolver consistently. WeatherClient then has its own retry/backoff
+  // for any residual flakiness.
+  vTaskDelay(1500 / portTICK_PERIOD_MS);
+  LOG_DBG("TDST", "Weather entry: heap free=%u, largest=%u",
+          static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+
+  double lat = TODOIST_CONFIG.getLatitude();
+  double lon = TODOIST_CONFIG.getLongitude();
+
+  weather::Forecast fc;
+  auto fcRes = weather::WeatherClient::fetchForecast(
+      lat, lon, TODOIST_CONFIG.getTemperatureUnit(), fc);
+  if (fcRes != weather::FetchResult::Ok) {
+    LOG_ERR("TDST", "Forecast fetch failed (%d)", static_cast<int>(fcRes));
+    return;
+  }
+  fillLocationName(fc);
+  _forecast = fc;
+
+  // Persist for the rest of the day. _today is "YYYY-MM-DD" in the user's
+  // timezone, captured at the top of proceedWithFetch(); reusing it keeps
+  // the cache key consistent with the calendar the user sees on screen.
+  if (_today[0] != '\0') {
+    TODOIST_CONFIG.setCachedWeather(_today, fc.wmoCode, fc.hi, fc.lo);
+  }
 }
 
 StrId TodoistActivity::fetchResultToStrId(todoist::FetchResult r) const {
@@ -499,18 +585,92 @@ void TodoistActivity::renderDaily(bool drawHints) {
   renderer.drawLine(leftEdge + 12, y, rightEdge - 12, y, true);
   y += 8;
 
-  // Weather row. PR1 ships with a hardcoded stub so the layout can be
-  // reviewed without standing up a second integration; PR2 will replace
-  // the literals with a fetched forecast.
-  // Layout: condition word left-aligned, "high / low" temperatures right-
-  // aligned. Reads like a weather widget rather than a sentence.
+  // Weather row. Three columns:
+  //   [icon] <Condition>   |   <City>   |   <hi° / lo°>
+  // Icon + condition word left-aligned, city centered between the two
+  // outer blocks, temperatures right-aligned. The icon (16x16) mirrors
+  // the WMO bucket label so a glance reads even before the eye parses
+  // the text. The city is clipped UTF-8-safely if it would collide
+  // with either neighbour.
   {
-    constexpr const char* kWeatherCondition = "Cloudy";
-    constexpr const char* kWeatherTemps = "22\xC2\xB0 / 14\xC2\xB0";  // ° = U+00B0
     constexpr int kWeatherPadding = 16;
-    renderer.drawText(UI_12_FONT_ID, leftEdge + kWeatherPadding, y, kWeatherCondition, true);
-    const int tempsW = renderer.getTextWidth(UI_12_FONT_ID, kWeatherTemps);
-    renderer.drawText(UI_12_FONT_ID, rightEdge - kWeatherPadding - tempsW, y, kWeatherTemps, true);
+    constexpr int kGap = 8;
+    constexpr int kIconSize = 24;
+    constexpr int kIconTextGap = 6;
+
+    // Right column: temperatures.
+    char tempsBuf[16];
+    if (_forecast.valid) {
+      // "22° / 14°" — same glyph style as the stub. Unit suffix is
+      // intentionally NOT appended per-value; the configured unit makes
+      // it unambiguous, and "22°C / 14°C" looks cluttered.
+      snprintf(tempsBuf, sizeof(tempsBuf), "%d\xC2\xB0 / %d\xC2\xB0",
+               _forecast.hi, _forecast.lo);
+    } else {
+      // U+2014 em dash for both sides — same width on both ends so the
+      // row stays visually balanced even when offline.
+      snprintf(tempsBuf, sizeof(tempsBuf), "\xE2\x80\x94 / \xE2\x80\x94");
+    }
+    const int tempsW = renderer.getTextWidth(UI_12_FONT_ID, tempsBuf);
+    const int tempsX = rightEdge - kWeatherPadding - tempsW;
+
+    // Left column: icon + condition word. We bracket conditional bytes
+    // (em dash) into the same buffer as the WMO label so the layout
+    // code is single-path regardless of forecast validity.
+    const char* condition =
+        _forecast.valid ? weather::wmoCodeToLabel(_forecast.wmoCode) : "\xE2\x80\x94";
+    const uint8_t* icon = _forecast.valid ? weather::wmoCodeToIcon(_forecast.wmoCode) : nullptr;
+
+    const int leftX = leftEdge + kWeatherPadding;
+    int leftCursor = leftX;
+    if (icon) {
+      // Optical alignment: drawText's `y` is the top of the text box and
+      // the baseline sits at y + ascender. UI_12 reserves a chunk of
+      // blank space above the cap line for diacritics, so visible glyphs
+      // span roughly the lower half of the ascender. To put the icon's
+      // optical center on the cap-to-baseline midline of "Clear", drop
+      // the icon's bottom past the baseline by ~6px (well within the
+      // 8px gap to the divider below).
+      const int ascender = renderer.getFontAscenderSize(UI_12_FONT_ID);
+      const int iconY = y + ascender + 6 - kIconSize;
+      renderer.drawIcon(icon, leftCursor, iconY, kIconSize, kIconSize);
+      leftCursor += kIconSize + kIconTextGap;
+    }
+    renderer.drawText(UI_12_FONT_ID, leftCursor, y, condition, true);
+    const int conditionW = renderer.getTextWidth(UI_12_FONT_ID, condition);
+    const int leftBlockRight = leftCursor + conditionW;
+
+    // Center column: city. Clipped to fit between the left block and
+    // the temperature column. UTF-8 safety: truncation may land
+    // mid-codepoint, so back up past any continuation bytes (0b10xxxxxx)
+    // before placing the NUL.
+    if (_forecast.locationName[0] != '\0') {
+      char cityBuf[32];
+      snprintf(cityBuf, sizeof(cityBuf), "%s", _forecast.locationName);
+
+      const int cityMaxWidth = (tempsX - kGap) - (leftBlockRight + kGap);
+      if (cityMaxWidth > 0) {
+        size_t len = strlen(cityBuf);
+        while (len > 0 && renderer.getTextWidth(UI_12_FONT_ID, cityBuf) > cityMaxWidth) {
+          --len;
+          while (len > 0 && (static_cast<unsigned char>(cityBuf[len]) & 0xC0) == 0x80) --len;
+          cityBuf[len] = '\0';
+        }
+        if (cityBuf[0] != '\0') {
+          const int cityW = renderer.getTextWidth(UI_12_FONT_ID, cityBuf);
+          // Center in the full content column, but clamp so we don't
+          // overlap either neighbour after truncation.
+          int cityX = leftEdge + (columnWidth - cityW) / 2;
+          const int minCityX = leftBlockRight + kGap;
+          const int maxCityX = tempsX - kGap - cityW;
+          if (cityX < minCityX) cityX = minCityX;
+          if (cityX > maxCityX) cityX = maxCityX;
+          renderer.drawText(UI_12_FONT_ID, cityX, y, cityBuf, true);
+        }
+      }
+    }
+
+    renderer.drawText(UI_12_FONT_ID, tempsX, y, tempsBuf, true);
     y += renderer.getLineHeight(UI_12_FONT_ID) + 8;
   }
 

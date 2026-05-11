@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <Logging.h>
 #include <esp_crt_bundle.h>
+#include <esp_heap_caps.h>
 #include <esp_http_client.h>
 
 #include <cstdio>
@@ -25,7 +26,15 @@ constexpr size_t kMaxTasks = 64;
 // spikes that trip OOM on the C3 when responses get large (e.g. the
 // ThisMonth filter for an active account). A fixed buffer trades a higher
 // steady-state footprint for predictability.
-constexpr size_t kMaxResponseBytes = 32 * 1024;
+//
+// 16 KB chosen empirically: even ThisMonth on a heavily-loaded account
+// rarely pushes past 12 KB of JSON (64-task cap × ~180 bytes/task incl.
+// envelope). 32 KB was originally picked for paranoia, but the C3's heap
+// fragmentation after WiFi+NTP+TLS handshake makes a single contiguous
+// 32 KB block unreliable — even with lazy allocation post-handshake, the
+// largest free block hovers around 24-28 KB. Truncation is handled
+// gracefully (we parse what we got), so erring smaller is safer.
+constexpr size_t kMaxResponseBytes = 16 * 1024;
 
 struct ResponseBuffer {
   char* data = nullptr;
@@ -48,8 +57,16 @@ esp_err_t httpEventHandler(esp_http_client_event_t* evt) {
     buf->data = static_cast<char*>(malloc(buf->capacity));
     if (!buf->data) {
       buf->allocFailed = true;
-      LOG_ERR("TDST", "OOM allocating %u-byte response buffer",
-              static_cast<unsigned>(buf->capacity));
+      // Capture heap state at the failure point — without this we can't
+      // tell apart "out of total heap" from "no contiguous block big
+      // enough". On the C3 the latter is the usual culprit because
+      // mbedTLS still holds its SSL state through the response phase.
+      size_t freeBytes = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+      size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+      LOG_ERR("TDST", "OOM allocating %u-byte response buffer (free=%u, largest=%u)",
+              static_cast<unsigned>(buf->capacity),
+              static_cast<unsigned>(freeBytes),
+              static_cast<unsigned>(largest));
       return ESP_OK;
     }
   }

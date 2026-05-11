@@ -89,6 +89,14 @@ DesignMode designModeFromString(const char* s, DesignMode fallback) {
   return fallback;
 }
 
+weather::TemperatureUnit temperatureUnitFromString(const char* s,
+                                                   weather::TemperatureUnit fallback) {
+  if (!s) return fallback;
+  if (strcmp(s, "celsius") == 0)    return weather::TemperatureUnit::Celsius;
+  if (strcmp(s, "fahrenheit") == 0) return weather::TemperatureUnit::Fahrenheit;
+  return fallback;
+}
+
 }  // namespace
 
 const char* dateFormatToString(DateFormat f) {
@@ -143,6 +151,14 @@ bool TodoistConfig::load() {
   gmtOffset = 0;
   dateFormat = DateFormat::DayMonthSlash;
   designMode = DesignMode::Minimal;
+  latitude = 0.0;
+  longitude = 0.0;
+  locationName.clear();
+  temperatureUnit = weather::TemperatureUnit::Celsius;
+  cachedWeatherDate.clear();
+  cachedWeatherWmo = 0;
+  cachedWeatherHi = 0;
+  cachedWeatherLo = 0;
 
   if (!Storage.exists(kConfigPath)) {
     LOG_DBG("TDST", "No config at %s", kConfigPath);
@@ -207,6 +223,22 @@ bool TodoistConfig::load() {
       doc["design"] | static_cast<const char*>(nullptr),
       DesignMode::Minimal);
 
+  // Lat/lon default to 0 (sentinel "not configured") — hasLocation() keys
+  // off the name being empty, not the coordinates, because (0,0) is a
+  // legitimate point off the African coast and we shouldn't silently
+  // re-geolocate a user who happens to be near it.
+  latitude  = doc["latitude"]  | 0.0;
+  longitude = doc["longitude"] | 0.0;
+  locationName = doc["location_name"] | std::string("");
+  temperatureUnit = temperatureUnitFromString(
+      doc["temperature_unit"] | static_cast<const char*>(nullptr),
+      weather::TemperatureUnit::Celsius);
+
+  cachedWeatherDate = doc["weather_date"] | std::string("");
+  cachedWeatherWmo = static_cast<uint8_t>(doc["weather_wmo"] | 0);
+  cachedWeatherHi = static_cast<int16_t>(doc["weather_hi"] | 0);
+  cachedWeatherLo = static_cast<int16_t>(doc["weather_lo"] | 0);
+
   loaded = true;
   LOG_DBG("TDST", "Config loaded (token=%s, sleep=%d)",
           apiToken.empty() ? "no" : "yes", sleepScreenEnabled);
@@ -267,6 +299,57 @@ bool TodoistConfig::setDesignMode(DesignMode d) {
   return persist();
 }
 
+bool TodoistConfig::setTemperatureUnit(weather::TemperatureUnit u) {
+  if (u == temperatureUnit) return true;
+  temperatureUnit = u;
+  // Cached hi/lo were stored in the previous unit. Invalidate so the
+  // next refresh re-fetches in the new unit rather than displaying
+  // converted-but-cached values that look slightly off.
+  cachedWeatherDate.clear();
+  return persist();
+}
+
+bool TodoistConfig::setLocation(double lat, double lon, const char* cityUtf8) {
+  // No early-return on unchanged values: a "re-detect" that resolves to the
+  // same coordinates should still rewrite the file (touches mtime), which
+  // signals to anyone watching that the detection actually ran.
+  latitude = lat;
+  longitude = lon;
+  locationName = cityUtf8 ? std::string(cityUtf8) : std::string();
+  // New (or re-confirmed) location → drop any cached forecast. Cheap to
+  // re-fetch, and the user clearly wanted a fresh state.
+  cachedWeatherDate.clear();
+  return persist();
+}
+
+bool TodoistConfig::clearLocation() {
+  if (!hasLocation() && latitude == 0.0 && longitude == 0.0 &&
+      cachedWeatherDate.empty()) {
+    return true;
+  }
+  latitude = 0.0;
+  longitude = 0.0;
+  locationName.clear();
+  cachedWeatherDate.clear();
+  return persist();
+}
+
+bool TodoistConfig::setCachedWeather(const char* todayYmd, uint8_t wmo,
+                                     int hi, int lo) {
+  if (!todayYmd || strlen(todayYmd) != 10) return false;
+  cachedWeatherDate = todayYmd;
+  cachedWeatherWmo = wmo;
+  // Defensive clamp: hi/lo are int16 on disk so silly inputs (e.g. a
+  // unit-mismatch ¬cached value of -300°C) can't overflow.
+  if (hi > 32767) hi = 32767;
+  if (hi < -32768) hi = -32768;
+  if (lo > 32767) lo = 32767;
+  if (lo < -32768) lo = -32768;
+  cachedWeatherHi = static_cast<int16_t>(hi);
+  cachedWeatherLo = static_cast<int16_t>(lo);
+  return persist();
+}
+
 bool TodoistConfig::persist() {
   JsonDocument doc;
   doc["api_token"] = apiToken;
@@ -278,6 +361,14 @@ bool TodoistConfig::persist() {
   doc["gmt_offset"] = static_cast<int>(gmtOffset);
   doc["date_format"] = dateFormatToString(dateFormat);
   doc["design"] = designModeToString(designMode);
+  doc["latitude"] = latitude;
+  doc["longitude"] = longitude;
+  doc["location_name"] = locationName;
+  doc["temperature_unit"] = weather::temperatureUnitToString(temperatureUnit);
+  doc["weather_date"] = cachedWeatherDate;
+  doc["weather_wmo"] = cachedWeatherWmo;
+  doc["weather_hi"] = cachedWeatherHi;
+  doc["weather_lo"] = cachedWeatherLo;
 
   // Atomic write: serialize to .tmp, close, rename to final path.
   if (Storage.exists(kConfigTmpPath)) {
@@ -348,6 +439,14 @@ bool TodoistConfig::forget() {
     gmtOffset = 0;
     dateFormat = DateFormat::DayMonthSlash;
     designMode = DesignMode::Minimal;
+    latitude = 0.0;
+    longitude = 0.0;
+    locationName.clear();
+    temperatureUnit = weather::TemperatureUnit::Celsius;
+    cachedWeatherDate.clear();
+    cachedWeatherWmo = 0;
+    cachedWeatherHi = 0;
+    cachedWeatherLo = 0;
     loaded = false;
   }
   return ok;

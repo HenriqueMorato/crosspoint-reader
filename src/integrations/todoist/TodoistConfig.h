@@ -1,5 +1,7 @@
 #pragma once
 
+#include "integrations/weather/WeatherTypes.h"
+
 #include <GfxRenderer.h>
 
 #include <cstdint>
@@ -105,6 +107,32 @@ class TodoistConfig {
   // Sleep-screen snapshot orientation.
   GfxRenderer::Orientation getSnapshotOrientation() const { return snapshotOrientation; }
 
+  // Geolocation cached from the last successful ipapi.co lookup. Persisted
+  // so re-opening the activity doesn't burn an HTTP call to re-detect on
+  // every refresh. hasLocation() returns true when locationName is non-
+  // empty; clearing it (via clearLocation()) forces a fresh geolocate on
+  // the next fetch. Lat/lon are stored as doubles to preserve enough
+  // precision for forecast accuracy (~0.0001° = ~11 m).
+  double getLatitude() const { return latitude; }
+  double getLongitude() const { return longitude; }
+  const std::string& getLocationName() const { return locationName; }
+  bool hasLocation() const { return !locationName.empty(); }
+
+  // Display unit for the Daily weather row. Sent verbatim to Open-Meteo's
+  // `temperature_unit` query parameter and used to pick the trailing
+  // suffix ('C' or 'F') on screen.
+  weather::TemperatureUnit getTemperatureUnit() const { return temperatureUnit; }
+
+  // Cached forecast (most recent successful fetch). The cache is keyed by
+  // the calendar date in the user's configured timezone: a refresh that
+  // happens later on the same date reuses these values instead of burning
+  // two more HTTPS round-trips. Cleared on location change, unit change,
+  // and Forget. `cachedWeatherDate` empty == no cache.
+  const std::string& getCachedWeatherDate() const { return cachedWeatherDate; }
+  uint8_t getCachedWeatherWmo() const { return cachedWeatherWmo; }
+  int16_t getCachedWeatherHi() const { return cachedWeatherHi; }
+  int16_t getCachedWeatherLo() const { return cachedWeatherLo; }
+
   // GMT offset in whole hours (-12..+14). The user-facing convention
   // matches civil usage: "GMT-3" means 3 hours behind UTC. Applied to the
   // C runtime via setenv("TZ", ...) so localtime_r returns wall-clock
@@ -122,6 +150,22 @@ class TodoistConfig {
   bool setGmtOffset(int8_t hours);
   bool setDateFormat(DateFormat f);
   bool setDesignMode(DesignMode d);
+  bool setTemperatureUnit(weather::TemperatureUnit u);
+
+  // Update all three location fields atomically. Called by TodoistActivity
+  // after a successful IP geolocation. Persists once at the end so a
+  // partial geolocation can't leave the JSON in a mixed state.
+  bool setLocation(double lat, double lon, const char* cityUtf8);
+
+  // Reset the cached location so the next refresh re-detects via IP.
+  // Used by the "Re-detect location" settings row. Also invalidates the
+  // cached weather (different place = different forecast).
+  bool clearLocation();
+
+  // Write a fresh forecast to the cache. `todayYmd` must be 10 chars
+  // ("YYYY-MM-DD"). Persists in the same JSON file as the rest of the
+  // config — one extra SD write per day per location.
+  bool setCachedWeather(const char* todayYmd, uint8_t wmo, int hi, int lo);
 
   // Token convenience: true when token is non-empty and >= 20 chars.
   bool hasValidToken() const;
@@ -147,6 +191,15 @@ class TodoistConfig {
   int8_t gmtOffset = 0;
   DateFormat dateFormat = DateFormat::DayMonthSlash;
   DesignMode designMode = DesignMode::Minimal;
+  double latitude = 0.0;
+  double longitude = 0.0;
+  std::string locationName;
+  weather::TemperatureUnit temperatureUnit = weather::TemperatureUnit::Celsius;
+  // Cached forecast. cachedWeatherDate empty == no cache.
+  std::string cachedWeatherDate;
+  uint8_t cachedWeatherWmo = 0;
+  int16_t cachedWeatherHi = 0;
+  int16_t cachedWeatherLo = 0;
   bool loaded = false;
 };
 

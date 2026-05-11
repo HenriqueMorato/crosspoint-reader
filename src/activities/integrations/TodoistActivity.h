@@ -4,6 +4,7 @@
 #include "MappedInputManager.h"
 #include "integrations/todoist/TodoistClient.h"
 #include "integrations/todoist/TodoistTask.h"
+#include "integrations/weather/WeatherTypes.h"
 #include "util/ButtonNavigator.h"
 
 #include <GfxRenderer.h>
@@ -36,6 +37,12 @@ class TodoistActivity : public Activity {
   // Step 2 of fetch: NTP + TodoistClient::fetch + populate state.
   // Called once WiFi is up.
   void proceedWithFetch();
+
+  // Step 3 (best-effort): IP-geolocate if no cached location, then fetch
+  // today's forecast. Failure is non-fatal — _forecast.valid is left false
+  // and the Daily renderer draws "—" placeholders. Skipped entirely on
+  // Minimal design (no weather row to fill).
+  void refreshWeatherIfNeeded();
 
   // Maps a FetchResult to the corresponding StrId for an error message.
   StrId fetchResultToStrId(todoist::FetchResult r) const;
@@ -89,6 +96,11 @@ class TodoistActivity : public Activity {
   // tasks as future (dueDate strictly greater than this) so they render
   // with a distinct glyph and a date suffix.
   char _today[11] = "";
+  // Today's forecast, populated by refreshWeatherIfNeeded(). When invalid
+  // the Daily renderer falls back to "—" placeholders for both the
+  // condition word and the temperature pair.
+  weather::Forecast _forecast{};
+
   // Snapshot of renderer orientation at onEnter() so we can restore it on
   // exit. Without this, switching activity orientation in TodoistConfig
   // leaks into HomeActivity (and corrupts its cached coverBuffer).

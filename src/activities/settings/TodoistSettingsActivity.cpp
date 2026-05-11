@@ -1,10 +1,17 @@
 #include "TodoistSettingsActivity.h"
 
 #include "Logging.h"
+#include "activities/network/WifiSelectionActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "integrations/todoist/TodoistConfig.h"
+#include "integrations/weather/WeatherClient.h"
+#include "integrations/weather/WeatherTypes.h"
 
 #include <I18n.h>
+#include <WiFi.h>
+
+#include <variant>
 
 namespace {
 
@@ -91,6 +98,17 @@ todoist::DesignMode nextDesignMode(todoist::DesignMode d) {
   return todoist::DesignMode::Minimal;
 }
 
+const char* temperatureUnitLabel(weather::TemperatureUnit u) {
+  return (u == weather::TemperatureUnit::Fahrenheit)
+             ? tr(STR_TODOIST_TEMP_UNIT_F)
+             : tr(STR_TODOIST_TEMP_UNIT_C);
+}
+
+weather::TemperatureUnit nextTemperatureUnit(weather::TemperatureUnit u) {
+  return (u == weather::TemperatureUnit::Celsius) ? weather::TemperatureUnit::Fahrenheit
+                                                  : weather::TemperatureUnit::Celsius;
+}
+
 todoist::DateFormat nextDateFormat(todoist::DateFormat f) {
   switch (f) {
     case todoist::DateFormat::DayMonthSlash: return todoist::DateFormat::MonthDaySlash;
@@ -160,9 +178,65 @@ void TodoistSettingsActivity::handleSelection() {
       TODOIST_CONFIG.setDateFormat(nextDateFormat(TODOIST_CONFIG.getDateFormat()));
       return;
     case 8:
+      TODOIST_CONFIG.setTemperatureUnit(nextTemperatureUnit(TODOIST_CONFIG.getTemperatureUnit()));
+      return;
+    case 9:
+      // WiFi must be up before we can geocode. If the user reached this
+      // screen without first opening the Todoist activity (which brings
+      // WiFi up via WifiSelectionActivity), esp_http_client will fault
+      // deep in lwIP/mbedTLS — a NULL FreeRTOS semaphore — because the
+      // network stack mutexes haven't been created. Bring it up here
+      // ourselves when needed, then chain into the keyboard entry.
+      if (WiFi.status() == WL_CONNECTED) {
+        launchCityEntry();
+      } else {
+        LOG_DBG("TDST", "WiFi down, launching WifiSelectionActivity before city entry");
+        startActivityForResult(
+            std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+            [this](const ActivityResult& result) {
+              if (result.isCancelled || WiFi.status() != WL_CONNECTED) {
+                LOG_ERR("TDST", "WiFi not connected, cannot geocode");
+                return;
+              }
+              launchCityEntry();
+            });
+      }
+      return;
+    case 10:
       TODOIST_CONFIG.forget();
       return;
   }
+}
+
+void TodoistSettingsActivity::launchCityEntry() {
+  // Seed with the current value (if set) so the user can re-confirm or
+  // tweak rather than retype. 63 chars cap mirrors the urlEncode buffer
+  // sizing in WeatherClient.cpp.
+  std::string initial = TODOIST_CONFIG.hasLocation() ? TODOIST_CONFIG.getLocationName() : "";
+  startActivityForResult(
+      std::make_unique<KeyboardEntryActivity>(renderer, mappedInput,
+                                              std::string(tr(STR_TODOIST_LOCATION_PROMPT)),
+                                              std::move(initial), 63, InputType::Text),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled) return;
+        const auto* kb = std::get_if<KeyboardResult>(&result.data);
+        if (!kb || kb->text.empty()) return;
+        double lat = 0, lon = 0;
+        char canonical[32];
+        auto res = weather::WeatherClient::geocodeCity(kb->text.c_str(), lat, lon,
+                                                       canonical, sizeof(canonical));
+        if (res != weather::FetchResult::Ok) {
+          LOG_ERR("TDST", "Geocode failed for '%s' (%d)", kb->text.c_str(),
+                  static_cast<int>(res));
+          return;
+        }
+        // setLocation persists + invalidates the cached forecast, so the
+        // next Todoist refresh fetches fresh weather for the new
+        // coordinates without any extra plumbing.
+        if (!TODOIST_CONFIG.setLocation(lat, lon, canonical)) {
+          LOG_ERR("TDST", "Could not persist new location");
+        }
+      });
 }
 
 GfxRenderer::Orientation TodoistSettingsActivity::nextOrientation(GfxRenderer::Orientation current) const {
@@ -204,7 +278,9 @@ void TodoistSettingsActivity::render(RenderLock&&) {
           case 5: return std::string(tr(STR_TODOIST_OVERDUE_FILTER));
           case 6: return std::string(tr(STR_TODOIST_TIMEZONE));
           case 7: return std::string(tr(STR_TODOIST_DATE_FORMAT));
-          case 8: return std::string(tr(STR_TODOIST_FORGET));
+          case 8: return std::string(tr(STR_TODOIST_TEMP_UNIT));
+          case 9: return std::string(tr(STR_TODOIST_LOCATION));
+          case 10: return std::string(tr(STR_TODOIST_FORGET));
         }
         return "";
       },
@@ -219,7 +295,11 @@ void TodoistSettingsActivity::render(RenderLock&&) {
           case 5: return std::string(overdueFilterLabel(TODOIST_CONFIG.getOverdueFilter()));
           case 6: return std::string(gmtOffsetLabel(TODOIST_CONFIG.getGmtOffset()));
           case 7: return std::string(todoist::dateFormatToString(TODOIST_CONFIG.getDateFormat()));
-          case 8: return std::string("");
+          case 8: return std::string(temperatureUnitLabel(TODOIST_CONFIG.getTemperatureUnit()));
+          case 9: return TODOIST_CONFIG.hasLocation()
+                             ? TODOIST_CONFIG.getLocationName()
+                             : std::string(tr(STR_TODOIST_LOCATION_NOT_SET));
+          case 10: return std::string("");
         }
         return "";
       },
