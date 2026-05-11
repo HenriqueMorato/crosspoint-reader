@@ -82,6 +82,13 @@ DateFormat dateFormatFromString(const char* s, DateFormat fallback) {
   return fallback;
 }
 
+DesignMode designModeFromString(const char* s, DesignMode fallback) {
+  if (!s) return fallback;
+  if (strcmp(s, "minimal") == 0) return DesignMode::Minimal;
+  if (strcmp(s, "daily") == 0)   return DesignMode::Daily;
+  return fallback;
+}
+
 }  // namespace
 
 const char* dateFormatToString(DateFormat f) {
@@ -94,6 +101,14 @@ const char* dateFormatToString(DateFormat f) {
     case DateFormat::MonthDayDot:   return "mm.dd";
   }
   return "dd/mm";
+}
+
+const char* designModeToString(DesignMode d) {
+  switch (d) {
+    case DesignMode::Minimal: return "minimal";
+    case DesignMode::Daily:   return "daily";
+  }
+  return "minimal";
 }
 
 size_t formatDate(int day, int month, DateFormat fmt, char* out, size_t outSize) {
@@ -127,6 +142,7 @@ bool TodoistConfig::load() {
   overdueFilter = OverdueFilter::Last7Days;
   gmtOffset = 0;
   dateFormat = DateFormat::DayMonthSlash;
+  designMode = DesignMode::Minimal;
 
   if (!Storage.exists(kConfigPath)) {
     LOG_DBG("TDST", "No config at %s", kConfigPath);
@@ -187,6 +203,10 @@ bool TodoistConfig::load() {
       doc["date_format"] | static_cast<const char*>(nullptr),
       DateFormat::DayMonthSlash);
 
+  designMode = designModeFromString(
+      doc["design"] | static_cast<const char*>(nullptr),
+      DesignMode::Minimal);
+
   loaded = true;
   LOG_DBG("TDST", "Config loaded (token=%s, sleep=%d)",
           apiToken.empty() ? "no" : "yes", sleepScreenEnabled);
@@ -241,6 +261,12 @@ bool TodoistConfig::setDateFormat(DateFormat f) {
   return persist();
 }
 
+bool TodoistConfig::setDesignMode(DesignMode d) {
+  if (d == designMode) return true;
+  designMode = d;
+  return persist();
+}
+
 bool TodoistConfig::persist() {
   JsonDocument doc;
   doc["api_token"] = apiToken;
@@ -251,6 +277,7 @@ bool TodoistConfig::persist() {
   doc["overdue_filter"] = overdueFilterToString(overdueFilter);
   doc["gmt_offset"] = static_cast<int>(gmtOffset);
   doc["date_format"] = dateFormatToString(dateFormat);
+  doc["design"] = designModeToString(designMode);
 
   // Atomic write: serialize to .tmp, close, rename to final path.
   if (Storage.exists(kConfigTmpPath)) {
@@ -319,6 +346,8 @@ bool TodoistConfig::forget() {
     dateFilter = DateFilter::Today;
     overdueFilter = OverdueFilter::Last7Days;
     gmtOffset = 0;
+    dateFormat = DateFormat::DayMonthSlash;
+    designMode = DesignMode::Minimal;
     loaded = false;
   }
   return ok;

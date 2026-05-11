@@ -7,8 +7,9 @@
 
 /**
  * Submenu for Todoist integration settings.
- * Items (in order): sleep-screen toggle, activity orientation, snapshot
- * orientation, date filter, overdue filter, GMT offset, forget.
+ * Items (in order): design mode, sleep-screen toggle, activity orientation,
+ * snapshot orientation, date filter, overdue filter, GMT offset, date format,
+ * forget.
  */
 class TodoistSettingsActivity final : public Activity {
  public:
@@ -25,5 +26,5 @@ class TodoistSettingsActivity final : public Activity {
 
   ButtonNavigator buttonNavigator;
   int selectedIndex = 0;
-  static constexpr int kItemCount = 8;
+  static constexpr int kItemCount = 9;
 };

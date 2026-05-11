@@ -33,6 +33,16 @@ enum class OverdueFilter : uint8_t {
   All = 2,        // all overdue, no lower bound
 };
 
+// Overall layout of the Todoist activity. Minimal is the original compact
+// list (Todoist title + Updated stamp + tasks). Daily is a richer dashboard
+// with today's date, day-of-week, weather row, and tasks, with the Updated
+// stamp moved to the bottom. The sleep-screen snapshot mirrors whichever
+// design is active.
+enum class DesignMode : uint8_t {
+  Minimal = 0,   // ← default, backwards-compatible
+  Daily = 1,
+};
+
 // Display format for any date rendered by the Todoist activity (header
 // "Updated ..." stamp and per-row due-date suffixes). Year is omitted in
 // every variant — task date ranges never span multiple years in normal
@@ -56,6 +66,11 @@ size_t formatDate(int day, int month, DateFormat fmt, char* out, size_t outSize)
 // universal English shorthand, so a single source of truth works for both.
 const char* dateFormatToString(DateFormat f);
 
+// Canonical wire string for the design mode ("minimal" / "daily"). The
+// human-readable settings label is i18n'd (see the STR_TODOIST_DESIGN
+// family of strings) so this is wire-only and not reused as a label.
+const char* designModeToString(DesignMode d);
+
 class TodoistConfig {
  public:
   static TodoistConfig& getInstance();
@@ -77,6 +92,9 @@ class TodoistConfig {
 
   // Display format for dates rendered by the Todoist activity.
   DateFormat getDateFormat() const { return dateFormat; }
+
+  // Overall layout selection. See DesignMode.
+  DesignMode getDesignMode() const { return designMode; }
 
   // Toggle: render Todoist snapshot on sleep when available.
   bool isSleepScreenEnabled() const { return sleepScreenEnabled; }
@@ -103,6 +121,7 @@ class TodoistConfig {
   bool setOverdueFilter(OverdueFilter f);
   bool setGmtOffset(int8_t hours);
   bool setDateFormat(DateFormat f);
+  bool setDesignMode(DesignMode d);
 
   // Token convenience: true when token is non-empty and >= 20 chars.
   bool hasValidToken() const;
@@ -127,6 +146,7 @@ class TodoistConfig {
   OverdueFilter overdueFilter = OverdueFilter::Last7Days;
   int8_t gmtOffset = 0;
   DateFormat dateFormat = DateFormat::DayMonthSlash;
+  DesignMode designMode = DesignMode::Minimal;
   bool loaded = false;
 };
 

@@ -44,8 +44,17 @@ class TodoistActivity : public Activity {
   void renderError();
   // When drawHints is false, the bottom hint bar is omitted and the list
   // expands into that space. Used by the sleep-screen snapshot, which has
-  // no buttons and shouldn't waste pixels on hints.
+  // no buttons and shouldn't waste pixels on hints. Dispatches to the
+  // active design mode (Minimal or Daily).
   void renderTaskList(bool drawHints = true);
+  void renderMinimal(bool drawHints);
+  void renderDaily(bool drawHints);
+  // Shared task-list body used by both designs. The caller passes the
+  // vertical band (top, height) and horizontal band (tileX, tileWidth)
+  // already adjusted for the design's header and any landscape hint
+  // reserve. Returns nothing — updates _lastVisibleIndex as a side effect.
+  void drawTaskRows(int contentTop, int contentHeight, int tileX, int tileWidth,
+                    bool drawHints, int pageWidth);
 
   void captureSnapshotIfNeeded();
   bool writeSnapshotMeta(GfxRenderer::Orientation o);
@@ -71,6 +80,11 @@ class TodoistActivity : public Activity {
   // re-parsing.
   uint8_t _capturedDay = 0;
   uint8_t _capturedMonth = 0;
+  // Full year and day-of-week (0=Sunday..6=Saturday) at fetch time. Used
+  // by the Daily design to render the top "May 11 2026 / Monday" block;
+  // the Minimal design ignores these.
+  uint16_t _capturedYear = 0;
+  uint8_t _capturedDow = 0;
   // "YYYY-MM-DD" snapshot of today's date at fetch time. Used to classify
   // tasks as future (dueDate strictly greater than this) so they render
   // with a distinct glyph and a date suffix.

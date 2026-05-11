@@ -209,6 +209,8 @@ void TodoistActivity::proceedWithFetch() {
     _capturedMin = static_cast<uint8_t>(tm_now.tm_min);
     _capturedDay = static_cast<uint8_t>(tm_now.tm_mday);
     _capturedMonth = static_cast<uint8_t>(tm_now.tm_mon + 1);
+    _capturedYear = static_cast<uint16_t>(tm_now.tm_year + 1900);
+    _capturedDow = static_cast<uint8_t>(tm_now.tm_wday);
     strftime(_today, sizeof(_today), "%Y-%m-%d", &tm_now);
 
     // Chronological sort: oldest overdue first, then today's timed tasks in
@@ -346,6 +348,27 @@ void TodoistActivity::renderError() {
 }
 
 void TodoistActivity::renderTaskList(bool drawHints) {
+  if (TODOIST_CONFIG.getDesignMode() == todoist::DesignMode::Daily) {
+    renderDaily(drawHints);
+  } else {
+    renderMinimal(drawHints);
+  }
+}
+
+namespace {
+
+// English month names for the Daily header. Kept local so the i18n layer
+// doesn't have to grow 12 new strings just for this view — when other
+// integrations need localised month names we'll lift this into I18n.
+constexpr const char* kMonthNames[12] = {
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"};
+constexpr const char* kDayNames[7] = {
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+}  // namespace
+
+void TodoistActivity::renderMinimal(bool drawHints) {
   renderer.clearScreen();
 
   const int pageWidth = renderer.getScreenWidth();
@@ -407,13 +430,140 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - (isLandscape ? 0 : hintReserve);
 
+  const int sidePadding = metrics.contentSidePadding;
+  const int tileX = sidePadding + hintLeftReserve;
+  const int tileWidth = pageWidth - sidePadding * 2 - hintLeftReserve - hintRightReserve;
+  drawTaskRows(contentTop, contentHeight, tileX, tileWidth, drawHints, pageWidth);
+}
+
+void TodoistActivity::renderDaily(bool drawHints) {
+  renderer.clearScreen();
+
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+
+  const auto orientation = renderer.getOrientation();
+  const bool isLandscape = (orientation == GfxRenderer::LandscapeClockwise ||
+                            orientation == GfxRenderer::LandscapeCounterClockwise);
+  const bool hintOnLeft = (orientation == GfxRenderer::LandscapeClockwise);
+  const int hintReserve = drawHints ? metrics.buttonHintsHeight + metrics.verticalSpacing * 2 : 0;
+  const int hintLeftReserve = (isLandscape && hintOnLeft) ? hintReserve : 0;
+  const int hintRightReserve = (isLandscape && !hintOnLeft) ? hintReserve : 0;
+
+  // Daily intentionally drops the standard header: it's a dashboard view,
+  // not a list/settings screen. The day-of-week is the visual anchor; a
+  // "Todoist" title would just compete for hierarchy. Battery is dropped
+  // with it — sleep snapshots already paint it over, and the active view
+  // is short-lived enough that a separate indicator isn't worth the noise.
+
+  if (drawHints) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
+
+  // Available drawing area excluding hint reserves.
+  const int leftEdge = hintLeftReserve;
+  const int rightEdge = pageWidth - hintRightReserve;
+  const int columnWidth = rightEdge - leftEdge;
+  // A bit more top padding now that we no longer have the header strip
+  // anchoring the top of the view.
+  int y = metrics.topPadding + metrics.verticalSpacing * 2;
+
+  // "May 11, 2026" — small, centered, year-bearing label. The top-of-view
+  // date intentionally uses month-name format (not the dd/mm setting) so
+  // the year is unambiguous. The dd/mm setting still drives the per-task
+  // due-date suffix and the bottom "Updated" line.
+  {
+    const int monthIdx = (_capturedMonth >= 1 && _capturedMonth <= 12) ? _capturedMonth - 1 : 0;
+    char dateLine[32];
+    snprintf(dateLine, sizeof(dateLine), "%s %u, %u",
+             kMonthNames[monthIdx], static_cast<unsigned>(_capturedDay),
+             static_cast<unsigned>(_capturedYear));
+    const int w = renderer.getTextWidth(UI_12_FONT_ID, dateLine);
+    renderer.drawText(UI_12_FONT_ID, leftEdge + (columnWidth - w) / 2, y, dateLine, true);
+    y += renderer.getLineHeight(UI_12_FONT_ID) + 4;
+  }
+
+  // "Monday" — large, bold, serif. The visual anchor of the Daily view.
+  {
+    const int dowIdx = (_capturedDow <= 6) ? _capturedDow : 0;
+    const char* dow = kDayNames[dowIdx];
+    const int w = renderer.getTextWidth(NOTOSERIF_18_FONT_ID, dow, EpdFontFamily::BOLD);
+    renderer.drawText(NOTOSERIF_18_FONT_ID, leftEdge + (columnWidth - w) / 2, y, dow,
+                      true, EpdFontFamily::BOLD);
+    y += renderer.getLineHeight(NOTOSERIF_18_FONT_ID) + 8;
+  }
+
+  // Divider above the weather strip.
+  renderer.drawLine(leftEdge + 12, y, rightEdge - 12, y, true);
+  y += 8;
+
+  // Weather row. PR1 ships with a hardcoded stub so the layout can be
+  // reviewed without standing up a second integration; PR2 will replace
+  // the literals with a fetched forecast.
+  // Layout: condition word left-aligned, "high / low" temperatures right-
+  // aligned. Reads like a weather widget rather than a sentence.
+  {
+    constexpr const char* kWeatherCondition = "Cloudy";
+    constexpr const char* kWeatherTemps = "22\xC2\xB0 / 14\xC2\xB0";  // ° = U+00B0
+    constexpr int kWeatherPadding = 16;
+    renderer.drawText(UI_12_FONT_ID, leftEdge + kWeatherPadding, y, kWeatherCondition, true);
+    const int tempsW = renderer.getTextWidth(UI_12_FONT_ID, kWeatherTemps);
+    renderer.drawText(UI_12_FONT_ID, rightEdge - kWeatherPadding - tempsW, y, kWeatherTemps, true);
+    y += renderer.getLineHeight(UI_12_FONT_ID) + 8;
+  }
+
+  // Divider below the weather strip — separates the dashboard chrome from
+  // the task list so the list reads as its own region.
+  renderer.drawLine(leftEdge + 12, y, rightEdge - 12, y, true);
+  y += 6;
+
+  // Bottom "Updated dd/mm - HH:MM" line, centered, framed by a divider
+  // above it. Mirrors the top weather sandwich so the chrome reads
+  // symmetrically.
+  char dateStr[8];
+  todoist::formatDate(_capturedDay, _capturedMonth, TODOIST_CONFIG.getDateFormat(),
+                      dateStr, sizeof(dateStr));
+  char updatedLine[32];
+  snprintf(updatedLine, sizeof(updatedLine), I18N.get(StrId::STR_TODOIST_TODAY_HEADER),
+           dateStr, _capturedHour, _capturedMin);
+
+  const int updatedLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  constexpr int kBottomPadding = 4;
+  constexpr int kBottomDividerGap = 6;
+  const int updatedY = pageHeight - (isLandscape ? 0 : hintReserve) - updatedLineHeight - kBottomPadding;
+  const int bottomDividerY = updatedY - kBottomDividerGap;
+  renderer.drawLine(leftEdge + 12, bottomDividerY, rightEdge - 12, bottomDividerY, true);
+  {
+    const int w = renderer.getTextWidth(SMALL_FONT_ID, updatedLine);
+    renderer.drawText(SMALL_FONT_ID, leftEdge + (columnWidth - w) / 2, updatedY, updatedLine, true);
+  }
+
+  // Task region sits between the lower divider and the bottom divider.
+  const int contentTop = y;
+  const int contentBottom = bottomDividerY - 4;
+  const int contentHeight = std::max(0, contentBottom - contentTop);
+
+  if (_tasks.empty()) {
+    GUI.drawPopup(renderer, tr(STR_TODOIST_NO_TASKS));
+    return;
+  }
+
+  const int sidePadding = metrics.contentSidePadding;
+  const int tileX = sidePadding + hintLeftReserve;
+  const int tileWidth = pageWidth - sidePadding * 2 - hintLeftReserve - hintRightReserve;
+  drawTaskRows(contentTop, contentHeight, tileX, tileWidth, drawHints, pageWidth);
+}
+
+void TodoistActivity::drawTaskRows(int contentTop, int contentHeight, int tileX, int tileWidth,
+                                   bool drawHints, int pageWidth) {
   // Compact bullet list. Each task gets only the height it needs (1 or 2
   // wrapped lines), with a small gap between tasks. No separator lines —
   // the bullet glyph is the row delimiter.
   // No outlines — the only visible chrome is a light-grey rounded fill
   // behind the cursor row, matching the Lyra home menu's selection style.
   // Variable row height is kept so 2-line task titles don't get truncated.
-  const int sidePadding = metrics.contentSidePadding;
   constexpr const char* kBulletNormal = "\xE2\x80\xA2";   // U+2022 BULLET — today / undated
   constexpr const char* kBulletOverdue = "!";              // overdue marker
   constexpr const char* kBulletFuture = "\xE2\x80\xBA";   // U+203A SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
@@ -437,8 +587,6 @@ void TodoistActivity::renderTaskList(bool drawHints) {
   // same x — avoids one row's "31/12" pushing wider than the previous "5/3".
   const int dateColWidth = renderer.getTextWidth(UI_10_FONT_ID, "00/00");
 
-  const int tileX = sidePadding + hintLeftReserve;
-  const int tileWidth = pageWidth - sidePadding * 2 - hintLeftReserve - hintRightReserve;
   const int textX = tileX + kTilePaddingX + bulletColWidth + kBulletGap;
   const int textWidth = tileX + tileWidth - kTilePaddingX - textX;
 

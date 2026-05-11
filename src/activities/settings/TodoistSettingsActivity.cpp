@@ -75,6 +75,22 @@ const char* gmtOffsetLabel(int8_t offset) {
   return buf;
 }
 
+const char* designModeLabel(todoist::DesignMode d) {
+  switch (d) {
+    case todoist::DesignMode::Minimal: return tr(STR_TODOIST_DESIGN_MINIMAL);
+    case todoist::DesignMode::Daily:   return tr(STR_TODOIST_DESIGN_DAILY);
+  }
+  return tr(STR_TODOIST_DESIGN_MINIMAL);
+}
+
+todoist::DesignMode nextDesignMode(todoist::DesignMode d) {
+  switch (d) {
+    case todoist::DesignMode::Minimal: return todoist::DesignMode::Daily;
+    case todoist::DesignMode::Daily:   return todoist::DesignMode::Minimal;
+  }
+  return todoist::DesignMode::Minimal;
+}
+
 todoist::DateFormat nextDateFormat(todoist::DateFormat f) {
   switch (f) {
     case todoist::DateFormat::DayMonthSlash: return todoist::DateFormat::MonthDaySlash;
@@ -120,27 +136,30 @@ void TodoistSettingsActivity::loop() {
 void TodoistSettingsActivity::handleSelection() {
   switch (selectedIndex) {
     case 0:
-      TODOIST_CONFIG.setSleepScreenEnabled(!TODOIST_CONFIG.isSleepScreenEnabled());
+      TODOIST_CONFIG.setDesignMode(nextDesignMode(TODOIST_CONFIG.getDesignMode()));
       return;
     case 1:
-      TODOIST_CONFIG.setActivityOrientation(nextOrientation(TODOIST_CONFIG.getActivityOrientation()));
+      TODOIST_CONFIG.setSleepScreenEnabled(!TODOIST_CONFIG.isSleepScreenEnabled());
       return;
     case 2:
-      TODOIST_CONFIG.setSnapshotOrientation(nextOrientation(TODOIST_CONFIG.getSnapshotOrientation()));
+      TODOIST_CONFIG.setActivityOrientation(nextOrientation(TODOIST_CONFIG.getActivityOrientation()));
       return;
     case 3:
-      TODOIST_CONFIG.setDateFilter(nextDateFilter(TODOIST_CONFIG.getDateFilter()));
+      TODOIST_CONFIG.setSnapshotOrientation(nextOrientation(TODOIST_CONFIG.getSnapshotOrientation()));
       return;
     case 4:
-      TODOIST_CONFIG.setOverdueFilter(nextOverdueFilter(TODOIST_CONFIG.getOverdueFilter()));
+      TODOIST_CONFIG.setDateFilter(nextDateFilter(TODOIST_CONFIG.getDateFilter()));
       return;
     case 5:
-      TODOIST_CONFIG.setGmtOffset(nextGmtOffset(TODOIST_CONFIG.getGmtOffset()));
+      TODOIST_CONFIG.setOverdueFilter(nextOverdueFilter(TODOIST_CONFIG.getOverdueFilter()));
       return;
     case 6:
-      TODOIST_CONFIG.setDateFormat(nextDateFormat(TODOIST_CONFIG.getDateFormat()));
+      TODOIST_CONFIG.setGmtOffset(nextGmtOffset(TODOIST_CONFIG.getGmtOffset()));
       return;
     case 7:
+      TODOIST_CONFIG.setDateFormat(nextDateFormat(TODOIST_CONFIG.getDateFormat()));
+      return;
+    case 8:
       TODOIST_CONFIG.forget();
       return;
   }
@@ -177,28 +196,30 @@ void TodoistSettingsActivity::render(RenderLock&&) {
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, kItemCount, selectedIndex,
       [](int i) -> std::string {
         switch (i) {
-          case 0: return std::string(tr(STR_TODOIST_SLEEP_SCREEN));
-          case 1: return std::string(tr(STR_TODOIST_ACTIVITY_ORIENTATION));
-          case 2: return std::string(tr(STR_TODOIST_SNAPSHOT_ORIENTATION));
-          case 3: return std::string(tr(STR_TODOIST_DATE_FILTER));
-          case 4: return std::string(tr(STR_TODOIST_OVERDUE_FILTER));
-          case 5: return std::string(tr(STR_TODOIST_TIMEZONE));
-          case 6: return std::string(tr(STR_TODOIST_DATE_FORMAT));
-          case 7: return std::string(tr(STR_TODOIST_FORGET));
+          case 0: return std::string(tr(STR_TODOIST_DESIGN));
+          case 1: return std::string(tr(STR_TODOIST_SLEEP_SCREEN));
+          case 2: return std::string(tr(STR_TODOIST_ACTIVITY_ORIENTATION));
+          case 3: return std::string(tr(STR_TODOIST_SNAPSHOT_ORIENTATION));
+          case 4: return std::string(tr(STR_TODOIST_DATE_FILTER));
+          case 5: return std::string(tr(STR_TODOIST_OVERDUE_FILTER));
+          case 6: return std::string(tr(STR_TODOIST_TIMEZONE));
+          case 7: return std::string(tr(STR_TODOIST_DATE_FORMAT));
+          case 8: return std::string(tr(STR_TODOIST_FORGET));
         }
         return "";
       },
       nullptr, nullptr,
       [](int i) -> std::string {
         switch (i) {
-          case 0: return std::string(TODOIST_CONFIG.isSleepScreenEnabled() ? "On" : "Off");
-          case 1: return std::string(orientationLabel(TODOIST_CONFIG.getActivityOrientation()));
-          case 2: return std::string(orientationLabel(TODOIST_CONFIG.getSnapshotOrientation()));
-          case 3: return std::string(dateFilterLabel(TODOIST_CONFIG.getDateFilter()));
-          case 4: return std::string(overdueFilterLabel(TODOIST_CONFIG.getOverdueFilter()));
-          case 5: return std::string(gmtOffsetLabel(TODOIST_CONFIG.getGmtOffset()));
-          case 6: return std::string(todoist::dateFormatToString(TODOIST_CONFIG.getDateFormat()));
-          case 7: return std::string("");
+          case 0: return std::string(designModeLabel(TODOIST_CONFIG.getDesignMode()));
+          case 1: return std::string(TODOIST_CONFIG.isSleepScreenEnabled() ? "On" : "Off");
+          case 2: return std::string(orientationLabel(TODOIST_CONFIG.getActivityOrientation()));
+          case 3: return std::string(orientationLabel(TODOIST_CONFIG.getSnapshotOrientation()));
+          case 4: return std::string(dateFilterLabel(TODOIST_CONFIG.getDateFilter()));
+          case 5: return std::string(overdueFilterLabel(TODOIST_CONFIG.getOverdueFilter()));
+          case 6: return std::string(gmtOffsetLabel(TODOIST_CONFIG.getGmtOffset()));
+          case 7: return std::string(todoist::dateFormatToString(TODOIST_CONFIG.getDateFormat()));
+          case 8: return std::string("");
         }
         return "";
       },
