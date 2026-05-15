@@ -97,6 +97,28 @@ weather::TemperatureUnit temperatureUnitFromString(const char* s,
   return fallback;
 }
 
+const char* locationModeToString(LocationMode m) {
+  return m == LocationMode::Manual ? "manual" : "auto";
+}
+
+LocationMode locationModeFromString(const char* s, LocationMode fallback) {
+  if (!s) return fallback;
+  if (strcmp(s, "auto") == 0)   return LocationMode::Auto;
+  if (strcmp(s, "manual") == 0) return LocationMode::Manual;
+  return fallback;
+}
+
+const char* gmtModeToString(GmtMode m) {
+  return m == GmtMode::Manual ? "manual" : "auto";
+}
+
+GmtMode gmtModeFromString(const char* s, GmtMode fallback) {
+  if (!s) return fallback;
+  if (strcmp(s, "auto") == 0)   return GmtMode::Auto;
+  if (strcmp(s, "manual") == 0) return GmtMode::Manual;
+  return fallback;
+}
+
 }  // namespace
 
 const char* dateFormatToString(DateFormat f) {
@@ -154,6 +176,13 @@ bool TodoistConfig::load() {
   latitude = 0.0;
   longitude = 0.0;
   locationName.clear();
+  locationMode = LocationMode::Auto;
+  gmtMode = GmtMode::Auto;
+  autoLatitude = 0.0;
+  autoLongitude = 0.0;
+  autoLocationName.clear();
+  autoGmtOffsetSeconds = 0;
+  autoFetchedAt = 0;
   temperatureUnit = weather::TemperatureUnit::Celsius;
   cachedWeatherDate.clear();
   cachedWeatherWmo = 0;
@@ -238,6 +267,33 @@ bool TodoistConfig::load() {
   cachedWeatherWmo = static_cast<uint8_t>(doc["weather_wmo"] | 0);
   cachedWeatherHi = static_cast<int16_t>(doc["weather_hi"] | 0);
   cachedWeatherLo = static_cast<int16_t>(doc["weather_lo"] | 0);
+
+  // Mode selectors. Files written before this feature have no key here —
+  // ArduinoJson's `|` fallback returns nullptr, the from-string helpers
+  // fall through to the default (Auto), so existing users land on Auto on
+  // first load after upgrade. Matches the spec ("default of both is auto").
+  locationMode = locationModeFromString(
+      doc["location_mode"] | static_cast<const char*>(nullptr),
+      LocationMode::Auto);
+  gmtMode = gmtModeFromString(
+      doc["gmt_mode"] | static_cast<const char*>(nullptr),
+      GmtMode::Auto);
+
+  // Auto cache. Each field defaults to a neutral zero/empty value so a
+  // partial pre-feature file (some keys missing) still loads cleanly.
+  autoLatitude  = doc["auto_latitude"]  | 0.0;
+  autoLongitude = doc["auto_longitude"] | 0.0;
+  autoLocationName = doc["auto_location_name"] | std::string("");
+  // Bounded clamp on offset: anything outside ±14 h is a corrupt file.
+  // We keep it as int (seconds) on disk to preserve half-hour zones.
+  int rawAutoOffset = doc["auto_gmt_offset_seconds"] | 0;
+  if (rawAutoOffset < -14 * 3600) rawAutoOffset = -14 * 3600;
+  if (rawAutoOffset >  14 * 3600) rawAutoOffset =  14 * 3600;
+  autoGmtOffsetSeconds = rawAutoOffset;
+  // ArduinoJson v6/v7 returns the right integer width; on this ESP build
+  // time_t is 32-bit signed, so a 64-bit epoch would clip in 2038. Fine
+  // for our use (Y2K38 is well beyond this firmware's lifetime).
+  autoFetchedAt = static_cast<time_t>(doc["auto_fetched_at"] | 0);
 
   loaded = true;
   LOG_DBG("TDST", "Config loaded (token=%s, sleep=%d)",
@@ -334,6 +390,92 @@ bool TodoistConfig::clearLocation() {
   return persist();
 }
 
+bool TodoistConfig::setLocationMode(LocationMode m) {
+  if (m == locationMode) return true;
+  locationMode = m;
+  // Effective coordinates just changed → drop the forecast cache so the
+  // next refresh fetches for the now-active location.
+  cachedWeatherDate.clear();
+  return persist();
+}
+
+bool TodoistConfig::setGmtMode(GmtMode m) {
+  if (m == gmtMode) return true;
+  gmtMode = m;
+  // The effective timezone may have shifted, which changes how "today"
+  // resolves in proceedWithFetch — invalidate the forecast cache to be
+  // safe. (Hi/lo wouldn't change, but the date key would.)
+  cachedWeatherDate.clear();
+  return persist();
+}
+
+bool TodoistConfig::setAutoLocation(double lat, double lon,
+                                    const char* cityUtf8, int offsetSeconds,
+                                    time_t fetchedAt) {
+  // Always rewrite (touches fetchedAt) even if values are unchanged — the
+  // TTL check downstream keys off fetchedAt advancing on each successful
+  // detection. Clamp the offset defensively to ±14 h to match the file
+  // schema and prevent a hand-edited or rogue response from poisoning
+  // applyTimezone with nonsense.
+  if (offsetSeconds < -14 * 3600) offsetSeconds = -14 * 3600;
+  if (offsetSeconds >  14 * 3600) offsetSeconds =  14 * 3600;
+  autoLatitude = lat;
+  autoLongitude = lon;
+  autoLocationName = cityUtf8 ? std::string(cityUtf8) : std::string();
+  autoGmtOffsetSeconds = offsetSeconds;
+  autoFetchedAt = fetchedAt;
+  // New auto coordinates → drop forecast cache. Same rationale as
+  // setLocation() above.
+  cachedWeatherDate.clear();
+  return persist();
+}
+
+bool TodoistConfig::clearAutoCache() {
+  if (!hasAutoLocation() && autoLatitude == 0.0 && autoLongitude == 0.0 &&
+      autoGmtOffsetSeconds == 0 && autoFetchedAt == 0 &&
+      cachedWeatherDate.empty()) {
+    return true;
+  }
+  autoLatitude = 0.0;
+  autoLongitude = 0.0;
+  autoLocationName.clear();
+  autoGmtOffsetSeconds = 0;
+  autoFetchedAt = 0;
+  cachedWeatherDate.clear();
+  return persist();
+}
+
+bool TodoistConfig::isAutoLocationStale(time_t now) const {
+  // Empty cache is trivially stale (the first fetch needs to populate it).
+  if (autoFetchedAt == 0 || autoLocationName.empty()) return true;
+  // Negative delta = clock went backwards (NTP correction). Treat as
+  // stale so we re-fetch rather than getting stuck with a future epoch.
+  if (now < autoFetchedAt) return true;
+  return (now - autoFetchedAt) > kAutoLocationCacheTtlSec;
+}
+
+double TodoistConfig::getEffectiveLatitude() const {
+  return (locationMode == LocationMode::Auto) ? autoLatitude : latitude;
+}
+
+double TodoistConfig::getEffectiveLongitude() const {
+  return (locationMode == LocationMode::Auto) ? autoLongitude : longitude;
+}
+
+const std::string& TodoistConfig::getEffectiveLocationName() const {
+  return (locationMode == LocationMode::Auto) ? autoLocationName : locationName;
+}
+
+int TodoistConfig::getEffectiveGmtOffsetSeconds() const {
+  if (gmtMode == GmtMode::Auto) return autoGmtOffsetSeconds;
+  // Manual cycler is hour-precision; widen to seconds for the unified API.
+  return static_cast<int>(gmtOffset) * 3600;
+}
+
+bool TodoistConfig::hasEffectiveLocation() const {
+  return !getEffectiveLocationName().empty();
+}
+
 bool TodoistConfig::setCachedWeather(const char* todayYmd, uint8_t wmo,
                                      int hi, int lo) {
   if (!todayYmd || strlen(todayYmd) != 10) return false;
@@ -369,6 +511,14 @@ bool TodoistConfig::persist() {
   doc["weather_wmo"] = cachedWeatherWmo;
   doc["weather_hi"] = cachedWeatherHi;
   doc["weather_lo"] = cachedWeatherLo;
+
+  doc["location_mode"] = locationModeToString(locationMode);
+  doc["gmt_mode"] = gmtModeToString(gmtMode);
+  doc["auto_latitude"] = autoLatitude;
+  doc["auto_longitude"] = autoLongitude;
+  doc["auto_location_name"] = autoLocationName;
+  doc["auto_gmt_offset_seconds"] = autoGmtOffsetSeconds;
+  doc["auto_fetched_at"] = static_cast<int64_t>(autoFetchedAt);
 
   // Atomic write: serialize to .tmp, close, rename to final path.
   if (Storage.exists(kConfigTmpPath)) {
@@ -442,6 +592,13 @@ bool TodoistConfig::forget() {
     latitude = 0.0;
     longitude = 0.0;
     locationName.clear();
+    locationMode = LocationMode::Auto;
+    gmtMode = GmtMode::Auto;
+    autoLatitude = 0.0;
+    autoLongitude = 0.0;
+    autoLocationName.clear();
+    autoGmtOffsetSeconds = 0;
+    autoFetchedAt = 0;
     temperatureUnit = weather::TemperatureUnit::Celsius;
     cachedWeatherDate.clear();
     cachedWeatherWmo = 0;

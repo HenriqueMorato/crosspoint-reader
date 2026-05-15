@@ -5,6 +5,7 @@
 #include <GfxRenderer.h>
 
 #include <cstdint>
+#include <ctime>
 #include <string>
 
 namespace todoist {
@@ -73,6 +74,27 @@ const char* dateFormatToString(DateFormat f);
 // family of strings) so this is wire-only and not reused as a label.
 const char* designModeToString(DesignMode d);
 
+// Source-of-truth for location and timezone. Auto pulls from ip-api.com on
+// each Todoist refresh (cached 24h on the SD card so we don't burn an HTTP
+// call per fetch). Manual uses the values typed by the user via the city
+// entry flow / GMT cycler. Defaults to Auto for both — convenient for
+// residential ISP users, overridable for anyone on Starlink/CGNAT/VPN
+// where IP geolocation misreports the city.
+enum class LocationMode : uint8_t {
+  Auto = 0,    // ← default
+  Manual = 1,
+};
+
+enum class GmtMode : uint8_t {
+  Auto = 0,    // ← default
+  Manual = 1,
+};
+
+// TTL for the cached ip-api response. After this many seconds the next
+// refresh will hit ip-api again; until then the cached lat/lon/city/offset
+// are reused. 24 h matches our once-per-day weather cache rhythm.
+inline constexpr int kAutoLocationCacheTtlSec = 24 * 60 * 60;
+
 class TodoistConfig {
  public:
   static TodoistConfig& getInstance();
@@ -107,16 +129,57 @@ class TodoistConfig {
   // Sleep-screen snapshot orientation.
   GfxRenderer::Orientation getSnapshotOrientation() const { return snapshotOrientation; }
 
-  // Geolocation cached from the last successful ipapi.co lookup. Persisted
-  // so re-opening the activity doesn't burn an HTTP call to re-detect on
-  // every refresh. hasLocation() returns true when locationName is non-
-  // empty; clearing it (via clearLocation()) forces a fresh geolocate on
-  // the next fetch. Lat/lon are stored as doubles to preserve enough
+  // Manually-entered location (user types a city, we geocode via Open-Meteo
+  // and persist lat/lon/name here). hasLocation() keys off the name being
+  // empty, not the coordinates, because (0,0) is a legitimate point off the
+  // African coast and we shouldn't silently re-geolocate a user who happens
+  // to be near it. Lat/lon are stored as doubles to preserve enough
   // precision for forecast accuracy (~0.0001° = ~11 m).
+  //
+  // These are the *manual* values regardless of the active LocationMode —
+  // they survive a switch to Auto so the user can flip back without
+  // retyping. Use getEffective* if you want the active values.
   double getLatitude() const { return latitude; }
   double getLongitude() const { return longitude; }
   const std::string& getLocationName() const { return locationName; }
   bool hasLocation() const { return !locationName.empty(); }
+
+  // Auto-detected location, cached from the last successful ip-api.com
+  // lookup. Empty `autoLocationName` == no cache yet. autoGmtOffsetSeconds
+  // preserves ip-api's full-precision offset (e.g. 19800 for IST = +05:30)
+  // rather than rounding to whole hours like the manual cycler does.
+  // autoFetchedAt is a unix epoch; older than kAutoLocationCacheTtlSec ago
+  // == stale, and the next refresh re-fetches.
+  double getAutoLatitude() const { return autoLatitude; }
+  double getAutoLongitude() const { return autoLongitude; }
+  const std::string& getAutoLocationName() const { return autoLocationName; }
+  int getAutoGmtOffsetSeconds() const { return autoGmtOffsetSeconds; }
+  time_t getAutoFetchedAt() const { return autoFetchedAt; }
+  bool hasAutoLocation() const { return !autoLocationName.empty(); }
+  // True when the cache is older than the TTL OR the cache is empty.
+  // Either condition means the next fetch path should hit ip-api.
+  bool isAutoLocationStale(time_t now) const;
+
+  // Active source-of-truth selection. Default Auto for both — IP-based
+  // geolocation is convenient and accurate on residential networks. User
+  // can flip either to Manual via Settings → Todoist if their IP misreports
+  // (Starlink, CGNAT, mobile, VPN).
+  LocationMode getLocationMode() const { return locationMode; }
+  GmtMode getGmtMode() const { return gmtMode; }
+
+  // Resolved values that downstream code (weather fetch, applyTimezone,
+  // renderer) should consume. Auto path returns the cached ip-api values
+  // (zero/empty if no cache yet); Manual path returns the typed values.
+  double getEffectiveLatitude() const;
+  double getEffectiveLongitude() const;
+  // Returns a reference; one of the underlying std::string members.
+  // Caller may copy if it needs lifetime beyond the next mutation.
+  const std::string& getEffectiveLocationName() const;
+  // Effective offset *in seconds east of UTC* — covers half-hour zones
+  // when Auto provides them. Manual values are hour-precision and
+  // multiplied by 3600 here.
+  int getEffectiveGmtOffsetSeconds() const;
+  bool hasEffectiveLocation() const;
 
   // Display unit for the Daily weather row. Sent verbatim to Open-Meteo's
   // `temperature_unit` query parameter and used to pick the trailing
@@ -152,15 +215,32 @@ class TodoistConfig {
   bool setDesignMode(DesignMode d);
   bool setTemperatureUnit(weather::TemperatureUnit u);
 
-  // Update all three location fields atomically. Called by TodoistActivity
-  // after a successful IP geolocation. Persists once at the end so a
-  // partial geolocation can't leave the JSON in a mixed state.
+  // Mode setters. Changing either invalidates the cached weather because
+  // the *effective* location/timezone may have just shifted under us
+  // (e.g. switching from Manual Lisbon to Auto-detected São Paulo).
+  bool setLocationMode(LocationMode m);
+  bool setGmtMode(GmtMode m);
+
+  // Update all three manual location fields atomically. Called by the
+  // city-entry flow in TodoistSettingsActivity after a successful
+  // Open-Meteo geocode. Persists once at the end so a partial geocode
+  // can't leave the JSON in a mixed state.
   bool setLocation(double lat, double lon, const char* cityUtf8);
 
-  // Reset the cached location so the next refresh re-detects via IP.
-  // Used by the "Re-detect location" settings row. Also invalidates the
-  // cached weather (different place = different forecast).
+  // Persist the result of an ip-api.com fetch. fetchedAt is a unix epoch
+  // (typically `time(nullptr)` from the caller). Invalidates the cached
+  // weather because the auto coords may have moved.
+  bool setAutoLocation(double lat, double lon, const char* cityUtf8,
+                       int offsetSeconds, time_t fetchedAt);
+
+  // Reset the *manual* location to "not set". The auto cache is unaffected.
+  // Invalidates the cached weather.
   bool clearLocation();
+
+  // Reset the *auto* cache so the next refresh re-detects via ip-api.
+  // Used by the "Clear cached location" settings row. Also invalidates
+  // the cached weather (different place = different forecast).
+  bool clearAutoCache();
 
   // Write a fresh forecast to the cache. `todayYmd` must be 10 chars
   // ("YYYY-MM-DD"). Persists in the same JSON file as the rest of the
@@ -195,6 +275,20 @@ class TodoistConfig {
   double longitude = 0.0;
   std::string locationName;
   weather::TemperatureUnit temperatureUnit = weather::TemperatureUnit::Celsius;
+  // Mode selectors — Auto by default so a fresh install Just Works on
+  // residential WiFi. Existing configs without these keys also default to
+  // Auto (intentional: forces every install onto the new default; user
+  // can flip to Manual via settings if their IP misreports).
+  LocationMode locationMode = LocationMode::Auto;
+  GmtMode gmtMode = GmtMode::Auto;
+  // Auto cache — populated by ip-api.com fetches. Zero/empty until first
+  // successful fetch. autoGmtOffsetSeconds keeps the raw seconds value
+  // from ip-api so half-hour zones (IST, NPT) survive the round-trip.
+  double autoLatitude = 0.0;
+  double autoLongitude = 0.0;
+  std::string autoLocationName;
+  int autoGmtOffsetSeconds = 0;
+  time_t autoFetchedAt = 0;
   // Cached forecast. cachedWeatherDate empty == no cache.
   std::string cachedWeatherDate;
   uint8_t cachedWeatherWmo = 0;
