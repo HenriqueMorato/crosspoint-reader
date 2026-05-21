@@ -4,6 +4,7 @@
 #include <I18n.h>
 
 #include "MappedInputManager.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "tasks/TasksConfig.h"
@@ -92,11 +93,11 @@ void TasksSettingsActivity::onExit() {
 }
 
 void TasksSettingsActivity::loop() {
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
   }
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     handleSelection();
     return;
   }
@@ -153,9 +154,22 @@ void TasksSettingsActivity::handleSelection() {
       TASKS_CONFIG.setActivityOrientation(next);
       break;
     }
-    case kIdxForget:
-      TASKS_CONFIG.forget();
-      break;
+    case kIdxForget: {
+      startActivityForResult(
+          std::make_unique<ConfirmationActivity>(renderer, mappedInput,
+                                                 tr(STR_TASKS_FORGET),
+                                                 tr(STR_TASKS_FORGET_PROMPT)),
+          [this](const ActivityResult& result) {
+            if (!result.isCancelled) {
+              TASKS_CONFIG.forget();
+              // Close settings so the user lands directly on the setup screen.
+              finish();
+              return;
+            }
+            requestUpdate();
+          });
+      return;
+    }
   }
   requestUpdate();
 }
@@ -167,13 +181,25 @@ void TasksSettingsActivity::render(RenderLock&&) {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_TASKS));
+  // In landscape, the hint strip lands on a side edge (left for CW, right for
+  // CCW) instead of the bottom — so reserve horizontal space rather than
+  // trimming vertical content.
+  const auto orientation = renderer.getOrientation();
+  const bool isLandscape = (orientation == GfxRenderer::LandscapeClockwise ||
+                            orientation == GfxRenderer::LandscapeCounterClockwise);
+  const bool hintOnLeft = (orientation == GfxRenderer::LandscapeClockwise);
+  const int hintReserve = metrics.buttonHintsHeight + metrics.verticalSpacing * 2;
+  const int hintLeftReserve = (isLandscape && hintOnLeft) ? hintReserve : 0;
+  const int hintRightReserve = (isLandscape && !hintOnLeft) ? hintReserve : 0;
+  const int contentWidth = pageWidth - hintLeftReserve - hintRightReserve;
+
+  GUI.drawHeader(renderer, Rect{hintLeftReserve, metrics.topPadding, contentWidth, metrics.headerHeight}, tr(STR_TASKS));
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int contentHeight = pageHeight - contentTop - (isLandscape ? 0 : (metrics.buttonHintsHeight + metrics.verticalSpacing * 2));
 
   GUI.drawList(
-      renderer, Rect{0, contentTop, pageWidth, contentHeight}, kItemCount,
+      renderer, Rect{hintLeftReserve, contentTop, contentWidth, contentHeight}, kItemCount,
       static_cast<int>(selectedIndex),
       [](int index) {
         return std::string(I18N.get(menuLabelStrId(index)));

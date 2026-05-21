@@ -31,6 +31,26 @@ constexpr const char* kDayNames[7] = {
 // time-validity gate.
 constexpr time_t kClockSetThreshold = 1700000000;  // ~Nov 2023
 
+// Natural compare: digit runs are compared as integers so "task 2" < "task 10"
+// instead of plain ASCII order which puts "10" before "2".
+int naturalCmp(const char* a, const char* b) {
+  while (*a && *b) {
+    unsigned char ca = static_cast<unsigned char>(*a);
+    unsigned char cb = static_cast<unsigned char>(*b);
+    if (ca >= '0' && ca <= '9' && cb >= '0' && cb <= '9') {
+      unsigned long va = 0, vb = 0;
+      while (*a >= '0' && *a <= '9') { va = va * 10 + static_cast<unsigned long>(*a - '0'); ++a; }
+      while (*b >= '0' && *b <= '9') { vb = vb * 10 + static_cast<unsigned long>(*b - '0'); ++b; }
+      if (va != vb) return va < vb ? -1 : 1;
+    } else {
+      if (ca != cb) return ca < cb ? -1 : 1;
+      ++a; ++b;
+    }
+  }
+  if (*a == *b) return 0;
+  return *a ? 1 : -1;
+}
+
 }  // namespace
 
 void TasksActivity::onEnter() {
@@ -109,6 +129,14 @@ void TasksActivity::loop() {
         [this](const ActivityResult&) {
           // Restore orientation (settings may have changed it) and re-render.
           renderer.setOrientation(TASKS_CONFIG.getActivityOrientation());
+          // Forget may have wiped the token while we were in settings —
+          // drop back to the setup screen instead of stale-rendering tasks.
+          if (!TASKS_CONFIG.hasToken()) {
+            _state = State::Setup;
+            _tasks.clear();
+            _scrollOffset = 0;
+            _selectedIndex = 0;
+          }
           requestUpdate(true);
         });
     return;
@@ -178,16 +206,13 @@ void TasksActivity::proceedWithFetch() {
     strftime(_today, sizeof(_today), "%Y-%m-%d", &tm_now);
   }
 
-  // Chronological sort: dueDate ascending, then dueTime ascending, untimed last.
+  // Sort by dueDate first (past → today → future, lexicographic on YYYY-MM-DD
+  // == chronological), then by title within the same date group.
   std::sort(_tasks.begin(), _tasks.end(),
             [](const tasks::Task& a, const tasks::Task& b) {
               int dateCmp = strcmp(a.dueDate, b.dueDate);
               if (dateCmp != 0) return dateCmp < 0;
-              bool aTimed = a.dueTime[0] != '\0';
-              bool bTimed = b.dueTime[0] != '\0';
-              if (aTimed != bTimed) return aTimed;
-              if (aTimed) return strcmp(a.dueTime, b.dueTime) < 0;
-              return false;
+              return naturalCmp(a.title, b.title) < 0;
             });
 
   _state = State::ShowingTasks;
@@ -217,7 +242,26 @@ void TasksActivity::render(RenderLock&&) {
 
 void TasksActivity::renderSetup() {
   renderer.clearScreen();
-  GUI.drawPopup(renderer, tr(STR_TASKS_TOKEN_SETUP_HINT));
+
+  const int pageWidth = renderer.getScreenWidth();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_TASKS));
+
+  // Multi-line setup instruction. drawPopup is single-line and the JSON path
+  // doesn't fit, so render manually with wrap.
+  constexpr int kSidePadding = 30;
+  const int maxTextWidth = pageWidth - 2 * kSidePadding;
+  const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  auto lines = renderer.wrappedText(UI_12_FONT_ID, tr(STR_TASKS_TOKEN_SETUP_HINT), maxTextWidth, 8);
+
+  int y = metrics.topPadding + metrics.headerHeight + 40;
+  for (const auto& line : lines) {
+    const int w = renderer.getTextWidth(UI_12_FONT_ID, line.c_str());
+    renderer.drawText(UI_12_FONT_ID, (pageWidth - w) / 2, y, line.c_str(), true);
+    y += lineHeight + 4;
+  }
+
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY),
                                             tr(STR_SETTINGS_TITLE), tr(STR_SETTINGS_TITLE));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -465,7 +509,7 @@ void TasksActivity::drawTaskRows(int contentTop, int contentHeight, int tileX, i
 
   // Scroll bar
   if (rendered < totalTasks - _scrollOffset || _scrollOffset > 0) {
-    const int barX = tileX + tileWidth - 6;
+    const int barX = tileX + tileWidth + 1;
     const int barTrackHeight = contentHeight;
     const int barHeight = std::max(8, (barTrackHeight * rendered) / totalTasks);
     const int maxOffset = std::max(1, totalTasks - rendered);
