@@ -2,6 +2,7 @@
 
 #include "Logging.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/settings/TasksSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "tasks/TasksConfig.h"
@@ -69,12 +70,20 @@ void TasksActivity::loop() {
     return;
   }
 
-  // Confirm = Refresh (in ShowingTasks / ShowingError) OR no-op (Setup).
+  // Confirm = Refresh (ShowingTasks/ShowingError) OR Retry from Setup (re-load
+  // config in case the user populated the token on the SD card).
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (_state == State::Setup) return;  // user must edit tasks.json on SD
-    if (_state == State::ShowingTasks || _state == State::ShowingError) {
-      // Re-check token: user may have populated tasks.json since launch.
+    if (_state == State::Setup) {
       TASKS_CONFIG.load();
+      if (TASKS_CONFIG.hasToken()) {
+        _state = State::Loading;
+        requestUpdate(true);
+        startFetch();
+      }
+      return;
+    }
+    if (_state == State::ShowingTasks || _state == State::ShowingError) {
+      TASKS_CONFIG.load();  // re-check token
       if (!TASKS_CONFIG.hasToken()) {
         _state = State::Setup;
         requestUpdate(true);
@@ -89,23 +98,38 @@ void TasksActivity::loop() {
     }
   }
 
-  // Cursor nav (ShowingTasks only).
-  _navigator.onNext([this] {
-    if (_state != State::ShowingTasks) return;
+  // Left or Right (front buttons) open Tasks Settings. Mirrors WeatherActivity's
+  // pattern of using front buttons to enter a submenu while side buttons drive
+  // scroll. Available in every state — including Setup, so users without a
+  // token can still adjust display preferences.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+      mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    startActivityForResult(
+        std::make_unique<TasksSettingsActivity>(renderer, mappedInput),
+        [this](const ActivityResult&) {
+          // Restore orientation (settings may have changed it) and re-render.
+          renderer.setOrientation(TASKS_CONFIG.getActivityOrientation());
+          requestUpdate(true);
+        });
+    return;
+  }
+
+  // Up/Down (side buttons) scroll the task list. ShowingTasks only.
+  if (_state != State::ShowingTasks) return;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
     if (_selectedIndex + 1 >= static_cast<int>(_tasks.size())) return;
     ++_selectedIndex;
     if (_lastVisibleIndex >= 0 && _selectedIndex > _lastVisibleIndex) {
       ++_scrollOffset;
     }
     requestUpdate();
-  });
-  _navigator.onPrevious([this] {
-    if (_state != State::ShowingTasks) return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
     if (_selectedIndex == 0) return;
     --_selectedIndex;
     if (_selectedIndex < _scrollOffset) _scrollOffset = _selectedIndex;
     requestUpdate();
-  });
+  }
 }
 
 void TasksActivity::startFetch() {
@@ -194,7 +218,8 @@ void TasksActivity::render(RenderLock&&) {
 void TasksActivity::renderSetup() {
   renderer.clearScreen();
   GUI.drawPopup(renderer, tr(STR_TASKS_TOKEN_SETUP_HINT));
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY),
+                                            tr(STR_SETTINGS_TITLE), tr(STR_SETTINGS_TITLE));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -208,7 +233,8 @@ void TasksActivity::renderLoading() {
 void TasksActivity::renderError() {
   renderer.clearScreen();
   GUI.drawPopup(renderer, I18N.get(_errorStrId));
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY),
+                                            tr(STR_SETTINGS_TITLE), tr(STR_SETTINGS_TITLE));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -253,7 +279,8 @@ void TasksActivity::renderMinimal() {
            pageWidth - hintLeftReserve - hintRightReserve, metrics.headerHeight},
       tr(STR_TASKS), timestamp);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY),
+                                            tr(STR_SETTINGS_TITLE), tr(STR_SETTINGS_TITLE));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (_tasks.empty()) {
@@ -284,7 +311,8 @@ void TasksActivity::renderDaily() {
   const int hintLeftReserve = (isLandscape && hintOnLeft) ? hintReserve : 0;
   const int hintRightReserve = (isLandscape && !hintOnLeft) ? hintReserve : 0;
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY),
+                                            tr(STR_SETTINGS_TITLE), tr(STR_SETTINGS_TITLE));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   const int leftEdge = hintLeftReserve;
