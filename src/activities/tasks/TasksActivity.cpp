@@ -175,6 +175,10 @@ void TasksActivity::startFetch() {
           return;
         }
         renderer.setOrientation(TASKS_CONFIG.getActivityOrientation());
+        // Allow lwIP's DNS resolver to initialize after WiFi associates —
+        // without this getaddrinfo() returns EAI_FAIL (202) for the first
+        // request on a fresh connection. Mirrors WeatherActivity::silentRefresh.
+        delay(500);
         proceedWithFetch();
       });
 }
