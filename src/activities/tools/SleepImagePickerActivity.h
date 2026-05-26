@@ -20,7 +20,8 @@ class SleepImagePickerActivity final : public Activity {
   // [0] Sleep mode selector (cycles on confirm)
   // [1] Cover mode: Fit/Crop (only when mode uses covers)
   // [2] Cover filter: None/Contrast/Inverted (only when mode uses covers)
-  // [3..N] Image files (only when mode uses images)
+  // [next] Custom mode: Random/Cycle (only when mode uses images)
+  // [next..N] Image files (only when mode uses images)
   // [N+1] Clear cache (always last)
   static constexpr int MODE_ITEM = 0;
 
@@ -28,17 +29,21 @@ class SleepImagePickerActivity final : public Activity {
   bool modeUsesImages() const;
   bool modeUsesCovers() const;
   int coverOptionCount() const;
+  int customOptionCount() const { return modeUsesImages() ? 1 : 0; }
   int totalItems() const;
-  int firstFileIndex() const { return 1 + coverOptionCount(); }
+  int customModeItemIndex() const { return 1 + coverOptionCount(); }
+  int firstFileIndex() const { return 1 + coverOptionCount() + customOptionCount(); }
   int cacheItemIndex() const { return totalItems() - 1; }
   bool isFileItem(int idx) const { return modeUsesImages() && idx >= firstFileIndex() && idx < cacheItemIndex(); }
   bool isCoverModeItem(int idx) const { return modeUsesCovers() && idx == 1; }
   bool isCoverFilterItem(int idx) const { return modeUsesCovers() && idx == 2; }
+  bool isCustomModeItem(int idx) const { return modeUsesImages() && idx == customModeItemIndex(); }
 
   bool isCurrentImageSelection(int idx) const;
   void cycleSleepMode();
   void cycleCoverMode();
   void cycleCoverFilter();
+  void cycleCustomMode();
   void saveImageSelection();
   void clearCache();
 
