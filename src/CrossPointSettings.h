@@ -31,6 +31,7 @@ class CrossPointSettings {
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
+  enum SLEEP_SCREEN_CUSTOM_MODE { RANDOM = 0, CYCLE = 1, SLEEP_SCREEN_CUSTOM_MODE_COUNT };
   enum SLEEP_SCREEN_COVER_FILTER {
     NO_FILTER = 0,
     BLACK_AND_WHITE = 1,
@@ -155,6 +156,8 @@ class CrossPointSettings {
   uint8_t sleepScreen = DARK;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
+  // Sleep screen custom mode (random vs cycle through images in /sleep/)
+  uint8_t sleepScreenCustomMode = RANDOM;
   // Sleep screen cover filter
   uint8_t sleepScreenCoverFilter = NO_FILTER;
   // Status bar settings (statusBar retained for migration only)

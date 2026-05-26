@@ -106,8 +106,8 @@ int SleepImagePickerActivity::coverOptionCount() const {
 }
 
 int SleepImagePickerActivity::totalItems() const {
-  // Mode selector + cover options (if applicable) + images (if applicable) + clear cache
-  return 1 + coverOptionCount() + (modeUsesImages() ? static_cast<int>(fileList.size()) : 0) + 1;
+  // Mode selector + cover options + custom mode + images (all conditional) + clear cache
+  return 1 + coverOptionCount() + customOptionCount() + (modeUsesImages() ? static_cast<int>(fileList.size()) : 0) + 1;
 }
 
 const char* SleepImagePickerActivity::currentModeName() const {
@@ -207,6 +207,12 @@ void SleepImagePickerActivity::cycleCoverFilter() {
   SETTINGS.sleepScreenCoverFilter = (SETTINGS.sleepScreenCoverFilter + 1) % CrossPointSettings::SLEEP_SCREEN_COVER_FILTER_COUNT;
   SETTINGS.saveToFile();
   SleepScreenCache::invalidateAll();
+  requestUpdate();
+}
+
+void SleepImagePickerActivity::cycleCustomMode() {
+  SETTINGS.sleepScreenCustomMode = (SETTINGS.sleepScreenCustomMode + 1) % CrossPointSettings::SLEEP_SCREEN_CUSTOM_MODE_COUNT;
+  SETTINGS.saveToFile();
   requestUpdate();
 }
 
@@ -329,6 +335,8 @@ void SleepImagePickerActivity::loop() {
       cycleCoverMode();
     } else if (isCoverFilterItem(selectorIndex)) {
       cycleCoverFilter();
+    } else if (isCustomModeItem(selectorIndex)) {
+      cycleCustomMode();
     } else if (selectorIndex == cacheItemIndex()) {
       clearCache();
     } else if (isFileItem(selectorIndex)) {
@@ -379,6 +387,11 @@ void SleepImagePickerActivity::renderList(int pageWidth, int pageHeight) {
       if (isCoverFilterItem(idx)) {
         const uint8_t f = SETTINGS.sleepScreenCoverFilter;
         return std::string(tr(STR_SLEEP_COVER_FILTER)) + ": " + (f < CrossPointSettings::SLEEP_SCREEN_COVER_FILTER_COUNT ? coverFilterNames[f] : "?");
+      }
+      if (isCustomModeItem(idx)) {
+        const auto m = SETTINGS.sleepScreenCustomMode;
+        return std::string(tr(STR_SLEEP_CUSTOM_MODE)) + ": " +
+               (m == CrossPointSettings::CYCLE ? tr(STR_CYCLE) : tr(STR_RANDOM));
       }
       if (idx == cacheItemIndex()) return std::string(tr(STR_RELOAD_SLEEP_IMAGE));
       if (isFileItem(idx)) {

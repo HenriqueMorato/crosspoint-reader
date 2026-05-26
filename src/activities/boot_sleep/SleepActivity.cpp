@@ -167,6 +167,23 @@ int pngOverlayDraw(PNGDRAW* pDraw) {
   return 1;
 }
 
+// Picks the index of the next sleep image to show, based on the user's Custom Mode.
+// CYCLE: returns sleepCycleIndex (modulo numFiles), advances and persists it.
+// RANDOM: returns a random index, rerolling if it matches lastSleepImage.
+// Caller is responsible for updating lastSleepImage and persisting state.
+size_t pickSleepImageIndex(size_t numFiles) {
+  if (SETTINGS.sleepScreenCustomMode == CrossPointSettings::CYCLE) {
+    const auto idx = APP_STATE.sleepCycleIndex % numFiles;
+    APP_STATE.sleepCycleIndex = static_cast<uint8_t>((idx + 1) % numFiles);
+    return idx;
+  }
+  auto idx = random(numFiles);
+  while (numFiles > 1 && APP_STATE.lastSleepImage != UINT8_MAX && idx == APP_STATE.lastSleepImage) {
+    idx = random(numFiles);
+  }
+  return idx;
+}
+
 }  // namespace
 
 void SleepActivity::onEnter() {
@@ -280,15 +297,10 @@ void SleepActivity::renderCustomSleepScreen() const {
     }
     const auto numFiles = files.size();
     if (numFiles > 0) {
-      // Generate a random number between 1 and numFiles
-      auto randomFileIndex = random(numFiles);
-      // If we picked the same image as last time, reroll
-      while (numFiles > 1 && APP_STATE.lastSleepImage != UINT8_MAX && randomFileIndex == APP_STATE.lastSleepImage) {
-        randomFileIndex = random(numFiles);
-      }
-      APP_STATE.lastSleepImage = randomFileIndex;
+      const auto pickedIndex = pickSleepImageIndex(numFiles);
+      APP_STATE.lastSleepImage = static_cast<uint8_t>(pickedIndex);
       APP_STATE.saveToFile();
-      const auto sourcePath = std::string(sleepDir) + "/" + files[randomFileIndex];
+      const auto sourcePath = std::string(sleepDir) + "/" + files[pickedIndex];
       // Try cache first
       if (displayCachedSleepScreen(sourcePath)) {
         dir.close();
@@ -296,7 +308,7 @@ void SleepActivity::renderCustomSleepScreen() const {
       }
       FsFile file;
       if (Storage.openFileForRead("SLP", sourcePath, file)) {
-        LOG_DBG("SLP", "Randomly loading: %s/%s", sleepDir, files[randomFileIndex].c_str());
+        LOG_DBG("SLP", "Loading sleep image: %s/%s", sleepDir, files[pickedIndex].c_str());
         delay(100);
         Bitmap bitmap(file, true);
         if (bitmap.parseHeaders() == BmpReaderError::Ok) {
@@ -1265,13 +1277,10 @@ void SleepActivity::renderOverlaySleepScreen() const {
     }
     const auto numFiles = files.size();
     if (numFiles > 0) {
-      auto randomFileIndex = random(numFiles);
-      while (numFiles > 1 && randomFileIndex == APP_STATE.lastSleepImage) {
-        randomFileIndex = random(numFiles);
-      }
-      APP_STATE.lastSleepImage = randomFileIndex;
+      const auto pickedIndex = pickSleepImageIndex(numFiles);
+      APP_STATE.lastSleepImage = static_cast<uint8_t>(pickedIndex);
       APP_STATE.saveToFile();
-      const std::string selected = "/sleep/" + files[randomFileIndex];
+      const std::string selected = "/sleep/" + files[pickedIndex];
       if (FsHelpers::checkFileExtension(selected, ".png")) {
         overlayDrawn = tryDrawPngOverlay(selected);
       } else {
