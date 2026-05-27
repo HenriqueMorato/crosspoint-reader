@@ -10,7 +10,6 @@ class CrossPointState {
  public:
   std::string openEpubPath;
   uint8_t lastSleepImage = UINT8_MAX;  // UINT8_MAX = unset sentinel
-  uint8_t sleepCycleIndex = 0;         // next image index in cycle mode
   uint8_t readerActivityLoadCount = 0;
   bool lastSleepFromReader = false;
   ~CrossPointState() = default;

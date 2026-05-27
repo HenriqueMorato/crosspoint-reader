@@ -168,14 +168,14 @@ int pngOverlayDraw(PNGDRAW* pDraw) {
 }
 
 // Picks the index of the next sleep image to show, based on the user's Custom Mode.
-// CYCLE: returns sleepCycleIndex (modulo numFiles), advances and persists it.
+// CYCLE: advances one step from lastSleepImage so switching between Random and
+// Cycle stays continuous from whatever was shown last.
 // RANDOM: returns a random index, rerolling if it matches lastSleepImage.
 // Caller is responsible for updating lastSleepImage and persisting state.
 size_t pickSleepImageIndex(size_t numFiles) {
   if (SETTINGS.sleepScreenCustomMode == CrossPointSettings::CYCLE) {
-    const auto idx = APP_STATE.sleepCycleIndex % numFiles;
-    APP_STATE.sleepCycleIndex = static_cast<uint8_t>((idx + 1) % numFiles);
-    return idx;
+    if (APP_STATE.lastSleepImage == UINT8_MAX) return 0;
+    return (static_cast<size_t>(APP_STATE.lastSleepImage) + 1) % numFiles;
   }
   auto idx = random(numFiles);
   while (numFiles > 1 && APP_STATE.lastSleepImage != UINT8_MAX && idx == APP_STATE.lastSleepImage) {
