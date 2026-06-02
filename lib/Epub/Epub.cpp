@@ -878,6 +878,14 @@ float Epub::calculateProgress(const int currentSpineIndex, const float currentSp
   if (bookSize == 0) {
     return 0.0f;
   }
+  // End-of-book screen lands currentSpineIndex one past the last valid spine item.
+  // Without this guard, getSpineItem's out-of-range fallback returns spine[0], producing
+  // a negative curChapterSize (size_t wrap) and bogus low progress (~0-10%). Treat
+  // "past last chapter" as fully read so booksFinished increments and per-book progress
+  // is correctly saved as 100% by BookStats.
+  if (currentSpineIndex >= static_cast<int>(getSpineItemsCount())) {
+    return 1.0f;
+  }
   const size_t prevChapterSize = (currentSpineIndex >= 1) ? getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
   const size_t curChapterSize = getCumulativeSpineItemSize(currentSpineIndex) - prevChapterSize;
   const float sectionProgSize = currentSpineRead * static_cast<float>(curChapterSize);
