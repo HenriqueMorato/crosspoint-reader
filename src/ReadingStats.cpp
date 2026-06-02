@@ -70,14 +70,27 @@ void ReadingStats::endSession(const char* title, uint8_t progress, const char* b
   totalReadSeconds += elapsedSecs;
   totalSessions++;
 
-  // Track book completion
-  uint8_t prevProgress = lastBookProgress;
+  // Track book completion using per-book progress (BookStats is keyed by path).
+  // The global lastBookProgress can't be trusted here — it carries the previous
+  // session's value regardless of which book that was, causing both missed
+  // completions (prev=100 from a different finished book) and double-counts
+  // (re-finishing an already-100% book after any partial session in between).
+  // BOOK_STATS.updateBook() runs after this block, so getBook() returns the
+  // pre-session value.
+  uint8_t bookPrevProgress = 0;
+  bool bookEverSeen = false;
+  if (bookPath && bookPath[0] != '\0') {
+    if (const auto* entry = BOOK_STATS.getBook(bookPath)) {
+      bookPrevProgress = entry->progress;
+      bookEverSeen = true;
+    }
+  }
   if (title && title[0] != '\0') {
     strncpy(lastBookTitle, title, sizeof(lastBookTitle) - 1);
     lastBookTitle[sizeof(lastBookTitle) - 1] = '\0';
   }
   lastBookProgress = progress;
-  if (progress >= 100 && prevProgress < 100) {
+  if (progress >= 100 && (!bookEverSeen || bookPrevProgress < 100)) {
     booksFinished++;
   }
 
