@@ -117,11 +117,18 @@ void EpubReaderActivity::onExit() {
   // Accumulate reading time and record book progress before resetting state
   uint8_t progress = 0;
   const char* title = epub ? epub->getTitle().c_str() : nullptr;
-  if (epub && epub->getBookSize() > 0 && section && section->pageCount > 0) {
-    const float chapterProgress =
-        static_cast<float>(section->currentPage) / static_cast<float>(section->pageCount);
-    progress = static_cast<uint8_t>(
-        clampPercent(static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f + 0.5f)));
+  if (epub && epub->getBookSize() > 0) {
+    if (currentSpineIndex >= epub->getSpineItemsCount()) {
+      // User advanced past the last chapter — pageTurn() reset section to nullptr
+      // so the formula below can't run, but the book is fully read. Treat as 100%
+      // so completion counts and per-book progress is recorded as finished.
+      progress = 100;
+    } else if (section && section->pageCount > 0) {
+      const float chapterProgress =
+          static_cast<float>(section->currentPage) / static_cast<float>(section->pageCount);
+      progress = static_cast<uint8_t>(
+          clampPercent(static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f + 0.5f)));
+    }
   }
   const char* bookPath = epub ? epub->getPath().c_str() : nullptr;
   READ_STATS.endSession(title, progress, bookPath);
